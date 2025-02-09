@@ -1,0 +1,10 @@
+showDB.py
+__pycache__/
+venv/
+env/
+lib/
+lib64/
+share/
+pyvenv.cfg
+bin/
+lib64
