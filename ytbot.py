@@ -35,39 +35,39 @@ async def changeCommands(application: Application) -> None:
 
 async def download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     url = update.message.text
-    #try:
-    songs = downloadSongsYb(str(url))
-    songs.regexUrl()
-    db = dataBase()
-    songs.regexUrl()
-    songs.generateYbUrl()
-    if not db.isOntheDatabase(songs.id_url):
-        songs.download()
-        db.insertData(songs.title, songs.artist, songs.id_url)
-    result = db.verifyURL(songs.id_url)
-    if result:
-        titleName, artistName = result[1], result[2]
-        match_files = []
-        current_path = os.getcwd()
-        new_dir_path = os.path.join(current_path, "Songs/")
-        for root, dirs, files in os.walk(new_dir_path):
-            for file in files:
-               if file.endswith(".m4a") and titleName in file:
-                   match_files.append(os.path.join(root, file))
-                   file_root, file_ext = os.path.splitext(file)
-        if match_files:
-            for audio_path in match_files:
-                with open(audio_path, "rb") as audio:
-                    
-                    await update.message.reply_audio(
-                                audio=audio_path,
-                                filename=file_root,
-                                title=titleName,
-                                performer=artistName,
-                                caption=f"Downloaded from YouTube\n @songytbbot",
-                            )
-    #except:
-        #await update.message.reply_text("Sorry, I couldn't download the song. Please try again later.")
+    try:
+        songs = downloadSongsYb(str(url))
+        songs.regexUrl()
+        db = dataBase()
+        songs.regexUrl()
+        songs.generateYbUrl()
+        if not db.isOntheDatabase(songs.id_url):
+            songs.download()
+            db.insertData(songs.title, songs.artist, songs.id_url)
+        result = db.verifyURL(songs.id_url)
+        if result:
+            titleName, artistName = result[1], result[2]
+            match_files = []
+            current_path = os.getcwd()
+            new_dir_path = os.path.join(current_path, "Songs/")
+            for root, dirs, files in os.walk(new_dir_path):
+                for file in files:
+                   if file.endswith(".m4a") and titleName in file:
+                       match_files.append(os.path.join(root, file))
+                       file_root, file_ext = os.path.splitext(file)
+            if match_files:
+                for audio_path in match_files:
+                    with open(audio_path, "rb") as audio:
+
+                        await update.message.reply_audio(
+                                    audio=audio_path,
+                                    filename=file_root,
+                                    title=titleName,
+                                    performer=artistName,
+                                    caption=f"Downloaded from YouTube\n @songytbbot",
+                                )
+    except:
+        await update.message.reply_text("Sorry, an error occurred while processing the request. Please try again later.")
 
 def main(TELEGRAM_TOKEN):
     application = Application.builder().token(str(TELEGRAM_TOKEN)).post_init(changeCommands).read_timeout(7).get_updates_connect_timeout(42).build()
