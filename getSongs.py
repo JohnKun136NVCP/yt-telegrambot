@@ -34,6 +34,8 @@ class downloadSongsYb:
     def __updateThumbalImg(self,thumbalImg):
         self.thumbalImg = self.thumbalImg
         return self.thumbalImg
+    def __cleanUpdate(self,filename):
+        return re.sub(r'[\\/*?:"<>|]',"",filename)
     def regexUrl(self):
         match = re.search(self.regex, self.url)
         if match:
@@ -56,13 +58,15 @@ class downloadSongsYb:
         streams = YouTube(self.completeUrl,on_complete_callback=on_progress)
         title = u"{}".format(streams.title)
         artist = u"{}".format(streams.author)
-        self.__updateTitle(title)
-        self.__updateArtist(artist)
+        self.__updateTitle(self.__cleanUpdate(title))
+        self.__updateArtist(self.__cleanUpdate(artist))
         self.__cleanNameArtist()
         self.__updateThumbalImg(streams.thumbnail_url)
         file_path = downloaded_File if downloaded_File.endswith(".m4a") else f"{downloaded_File}.m4a"
         targetNmae = MP4(file_path)
         targetNmae.delete()
+        self.title = self.title.encode('utf-8').decode('utf-8')
+        self.artist = self.artist.encode('utf-8').decode('utf-8')
         targetNmae["\xa9nam"] = self.title
         targetNmae["\xa9ART"] = self.artist
         targetNmae.save()
@@ -114,6 +118,8 @@ class dataBase():
         if result:
             return True
         else:
+            title = title.encode('utf-8').decode('utf-8')
+            artist = artist.encode('utf-8').decode('utf-8')
             self.cursor.execute('''
             INSERT INTO songs (name,channel,uri) VALUES (?,?,?)''',(title,artist,id_url))
             self.connect.commit()
@@ -121,8 +127,8 @@ class dataBase():
     def verifyURL(self,id_url):
         self.cursor.execute('SELECT * FROM songs WHERE uri = ?',(id_url,))
         result = self.cursor.fetchone()
-        if result:return result
-        else:return None
+        if result:return (True,result)
+        else:return (False,False)
     def deletingDatabase(self):
         self.cursor.execute('SELECT * FROM songs WHERE id = 40')
         result = self.cursor.fetchone() 
