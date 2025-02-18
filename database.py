@@ -14,7 +14,7 @@ class dataBase:
             name TEXT,
             channel TEXT,
             uri TEXT,
-            duration REAL,
+            duration INTEGER,
             thumbnail_url TEXT
         );'''
         self.cursor.execute(self.db_create_query)
@@ -68,6 +68,7 @@ class dataBase:
                     file_path = os.path.join(root, file)
                     audio = MP4(file_path)
                     duration = audio.info.length
+                    duration = int(duration)
                     # Extract song title to find corresponding database entry
                     song_title = os.path.splitext(file)[0]
                     song_title = self.cleanString(song_title)
