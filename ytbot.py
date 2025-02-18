@@ -3,11 +3,12 @@ import time
 import os
 from getSongs import downloadSongsYb
 from getSongs import dataBase
-from telegram import Update, BotCommand
+from telegram import Update, BotCommand, Bot
 from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
+    CallbackContext,
     ConversationHandler,
     MessageHandler,
     filters,
@@ -22,10 +23,10 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def start(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text("Hi, I'm a bot that can download songs from YouTube. Send me a link to a YouTube video and I'll send you the audio file.")
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def help_command(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text(f"How to use:\n 1. Go to the page with an interesting video (for example - https://www.youtube.com/watch?v=pIGMmlXApUE). \n2. Click the Share button. \n3. In the menu that opens, select - Telegram. \n4. When Telegram opens, click on the chat with the blue dude! Or just paste the link to the video into the chat and send it to the bot.")
 
 async def changeCommands(application: Application) -> None:
@@ -33,7 +34,7 @@ async def changeCommands(application: Application) -> None:
     await application.bot.set_my_commands(command)
     await application.bot.set_chat_menu_button()
 
-async def download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def download(update: Update, context: CallbackContext) -> None:
     url = update.message.text
     try:
         songs = downloadSongsYb(str(url))
@@ -43,10 +44,15 @@ async def download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         songs.generateYbUrl()
         if not db.isOntheDatabase(songs.id_url):
             songs.download()
-            db.insertData(songs.title, songs.artist, songs.id_url)
+            db.insertData(songs.title, songs.artist, songs.id_url,songs.duration,songs.thumbalImg)
         isOnDB,result = db.verifyURL(songs.id_url)
         if isOnDB:
-            titleName, artistName = result[1], result[2]
+            song_id = result[0]
+            if result[4] is None or result[5] is None:
+                songs.download()
+                db.updateSong(song_id, songs.duration, songs.thumbalImg)
+        if isOnDB:
+            titleName, artistName,duration, thumbal= result[1], result[2],result[4],result[5]
             match_files = []
             current_path = os.getcwd()
             new_dir_path = os.path.join(current_path, "Songs/")
@@ -58,13 +64,16 @@ async def download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             if match_files:
                 for audio_path in match_files:
                     with open(audio_path, "rb") as audio:
-                        await update.message.reply_audio(
-                                    audio=audio_path,
-                                    filename=file_root,
-                                    title=titleName,
-                                    performer=artistName,
-                                    caption=f"Downloaded from YouTube\n @songytbbot",
-                                )
+                        thumbal = songs.download_thumbnail(thumbal)
+                        await context.bot.send_audio(
+                            chat_id=update.message.chat_id,
+                            audio=audio_path,
+                            title=titleName,
+                            performer=artistName,
+                            duration=duration,
+                            thumbnail=thumbal,
+                            caption=f"Downloaded from YouTube\n @songytbbot")
+                songs.cleanTempdir(thumbal)
     except:
         await update.message.reply_text("Sorry, an error occurred while processing the request. Please try again later.")
 

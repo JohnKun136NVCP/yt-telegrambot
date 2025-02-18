@@ -5,6 +5,7 @@ import os.path
 import ssl
 import re
 import sqlite3
+import requests
 from datetime import datetime,timedelta
 from mutagen.mp4 import MP4
 from mutagen.id3 import ID3, TIT2, TPE1, error
@@ -25,6 +26,7 @@ class downloadSongsYb:
         self.completeUrl = str
         self.title = str
         self.artist = str
+        self.duration = int
     def __updateTitle(self,title):
         self.title = title
         return self.title
@@ -32,8 +34,13 @@ class downloadSongsYb:
         self.artist = artist
         return self.artist
     def __updateThumbalImg(self,thumbalImg):
-        self.thumbalImg = self.thumbalImg
+        self.thumbalImg = thumbalImg
         return self.thumbalImg
+    def __updateDuration(self,song_duration):
+        song_duration = song_duration.info.length
+        duration = int(song_duration)
+        self.duration = duration
+        return self.duration
     def __cleanUpdate(self,filename):
         return re.sub(r'[\\/*?:"<>|]',"",filename)
     def regexUrl(self):
@@ -64,12 +71,36 @@ class downloadSongsYb:
         self.__updateThumbalImg(streams.thumbnail_url)
         file_path = downloaded_File if downloaded_File.endswith(".m4a") else f"{downloaded_File}.m4a"
         targetNmae = MP4(file_path)
+        self.__updateDuration(targetNmae)
         targetNmae.delete()
         self.title = self.title.encode('utf-8').decode('utf-8')
         self.artist = self.artist.encode('utf-8').decode('utf-8')
         targetNmae["\xa9nam"] = self.title
         targetNmae["\xa9ART"] = self.artist
         targetNmae.save()
+    def download_thumbnail(self,url_thumbnail):
+        try:
+            ssl._create_default_https_context = ssl._create_unverified_context
+            if url_thumbnail is not None:
+                temp_dir = os.path.join(os.getcwd(), "temp")
+                os.makedirs(temp_dir, exist_ok=True)
+                img_path = os.path.join(temp_dir, "thumb.jpg")
+                response = requests.get(url_thumbnail)
+                if response.status_code == 200:
+                    with open(img_path, "wb") as img:
+                        img.write(response.content)
+                    return img_path
+                else:
+                    shutil.rmtree(temp_dir)
+                    return None
+            else:return None    
+        except Exception as e:
+            return None
+    def cleanTempdir(self,img_path):
+        if img_path:
+            temp_dir = os.path.join(os.getcwd(), "temp")
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
     def movedFile(self):
         """
         Move downloaded audio files to the specified directory.
@@ -101,7 +132,9 @@ class dataBase():
         id INTEGER PRIMARY KEY,
         name TEXT,
         channel TEXT,
-        uri TEXT
+        uri TEXT,
+        duration INTEGER,
+        thumbnail_url TEXT
         );'''
         self.cursor.execute(self.db_create_query)
     def isOntheDatabase(self,uri):
@@ -111,9 +144,9 @@ class dataBase():
             return True
         else:
             return False
-    def insertData(self,title,artist,id_url):
+    def insertData(self,title,artist,id_url,duration,thumbalImg):
         self.cursor.execute('''
-        SELECT * FROM songs WHERE name = ? AND channel = ? AND uri = ?''', (title,artist,id_url))
+        SELECT * FROM songs WHERE name = ? AND channel = ? AND uri = ? AND duration = ? AND thumbnail_url = ?''', (title,artist,id_url,duration,thumbalImg))
         result = self.cursor.fetchone()
         if result:
             return True
@@ -121,7 +154,7 @@ class dataBase():
             title = title.encode('utf-8').decode('utf-8')
             artist = artist.encode('utf-8').decode('utf-8')
             self.cursor.execute('''
-            INSERT INTO songs (name,channel,uri) VALUES (?,?,?)''',(title,artist,id_url))
+            INSERT INTO songs (name,channel,uri,duration,thumbnail_url) VALUES (?,?,?,?,?)''',(title,artist,id_url,duration,thumbalImg))
             self.connect.commit()
             return False
     def verifyURL(self,id_url):
@@ -129,6 +162,10 @@ class dataBase():
         result = self.cursor.fetchone()
         if result:return (True,result)
         else:return (False,False)
+    def updateSong(self, song_id, duration, thumbnail_url):
+        update_query = '''UPDATE songs SET duration = ?, thumbnail_url = ? WHERE id = ?'''
+        self.cursor.execute(update_query, (duration, thumbnail_url, song_id))
+        self.connect.commit()
     def deletingDatabase(self):
         self.cursor.execute('SELECT * FROM songs WHERE id = 40')
         result = self.cursor.fetchone() 
