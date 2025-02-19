@@ -30,7 +30,7 @@ Make sure you have the following installed:
     ```bash
     pip install -r requirements.txt
     ```
-3. On ```main.py``` replace ```TELEGRAM_TOKEN``` and replace it
+3. On ```main.py``` replace YOUR Token ```TELEGRAM_TOKEN``` and put quotes like this ```"absc123+.."```
 
 4. Run the script
     ```bash
