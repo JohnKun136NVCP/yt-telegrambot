@@ -2,13 +2,12 @@ import sqlite3
 import os
 import re
 import sys
-from mutagen.mp4 import MP4  # or use the appropriate file type
+from mutagen.mp4 import MP4
 
 class dataBase:
     def __init__(self):
         self.connect = sqlite3.connect("idSongs.db")
         self.cursor = self.connect.cursor()
-        # Update schema to include duration and thumbnail_url
         self.db_create_query = '''CREATE TABLE IF NOT EXISTS songs (
             id INTEGER PRIMARY KEY,
             name TEXT,
@@ -18,7 +17,6 @@ class dataBase:
             thumbnail_url TEXT
         );'''
         self.cursor.execute(self.db_create_query)
-        # Update existing table if it doesn't have the new columns
         self.cursor.execute('PRAGMA table_info(songs)')
         columns = [col[1] for col in self.cursor.fetchall()]
         if 'duration' not in columns:
@@ -48,11 +46,14 @@ class dataBase:
 
             if os.path.exists(file_path):
                 os.remove(file_path)
+
+            # Reorder the IDs
+            self.reorderIds()
+            print("Song deleted and IDs reordered")
         else:
             print("No song found with that id")
-
     def addSong(self, name, channel, uri, thumbnail_url):
-        audio = MP4(uri)  # or use the appropriate function for your file type
+        audio = MP4(uri)
         duration = audio.info.length
         insert_query = '''INSERT INTO songs (name, channel, uri, duration, thumbnail_url) 
                           VALUES (?, ?, ?, ?, ?);'''
@@ -69,21 +70,43 @@ class dataBase:
                     audio = MP4(file_path)
                     duration = audio.info.length
                     duration = int(duration)
-                    # Extract song title to find corresponding database entry
                     song_title = os.path.splitext(file)[0]
                     song_title = self.cleanString(song_title)
-                    # Update the database with the new duration
                     self.cursor.execute("UPDATE songs SET duration = ? WHERE name = ?", (duration, song_title))
         self.connect.commit()
-
+    def reorder_ids(self):
+        # Eliminar la tabla temporal si ya existe
+        self.cursor.execute('DROP TABLE IF EXISTS temp_songs')
+        # Create a new temporary table with AUTOINCREMENT for id
+        self.cursor.execute('''
+            CREATE TABLE temp_songs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT,
+                channel TEXT,
+                uri TEXT,
+                duration INTEGER,
+                thumbnail_url TEXT
+            );
+        ''')
+        self.cursor.execute('''
+            INSERT INTO temp_songs (name, channel, uri, duration, thumbnail_url)
+            SELECT name, channel, uri, duration, thumbnail_url
+            FROM songs;
+        ''')
+        self.cursor.execute('DROP TABLE songs')
+        self.cursor.execute('ALTER TABLE temp_songs RENAME TO songs')
+        self
 def main():
     dbs = dataBase()
-    print("Show database: showdb\nDelete song: delete\nAdd song: add\nUpdate durations: updatedurations\nQuit: q")
+    print("Show database: showdb\nReorderIDS: reorderid\nDelete song: delete\nAdd song: add\nUpdate durations: updatedurations\nQuit: q")
     for line in sys.stdin:
         if 'q' == line.rstrip():
             break
         elif 'showdb' == line.rstrip():
             dbs.showDatabase()
+        elif 'reorderid' == line.rstrip():
+            dbs.reorder_ids()
+            print("IDs reordered")
         elif 'delete' == line.rstrip():
             try:
                 dbs.showDatabase()
@@ -106,7 +129,7 @@ def main():
             dbs.updateDurations()
             print("Durations updated")
         
-        print("Show database: showdb\nDelete song: delete\nAdd song: add\nUpdate durations: updatedurations\nQuit: q")
+        print("Show database: showdb\nReorderIDS: reorderid\nDelete song: delete\nAdd song: add\nUpdate durations: updatedurations\nQuit: q")
 
 if __name__ == "__main__":
     main()
