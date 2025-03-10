@@ -129,7 +129,7 @@ class dataBase():
         self.connect = sqlite3.connect("idSongs.db")
         self.cursor = self.connect.cursor()
         self.db_create_query = '''CREATE TABLE IF NOT EXISTS songs (
-        id INTEGER PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT,
         channel TEXT,
         uri TEXT,
