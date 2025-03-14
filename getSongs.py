@@ -7,10 +7,11 @@ import re
 import sqlite3
 import requests
 from datetime import datetime,timedelta
-from mutagen.mp4 import MP4
+from mutagen.mp4 import MP4, MP4Cover
 from mutagen.id3 import ID3, TIT2, TPE1, error
 from pytubefix import YouTube
 from pytubefix.cli import on_progress
+from metaSong import songsData
 
 
 
@@ -21,26 +22,9 @@ class downloadSongsYb:
         self.regex =  r'(?:\?v=|\/)([a-zA-Z0-9_-]{11})'
         self.regexArtist = r'^(.*) - Topic$'
         self.id_url = None
-        self.thumbalImg = str
         self.httpUrl = "http://youtube.com/watch?v="
         self.completeUrl = str
-        self.title = str
-        self.artist = str
-        self.duration = int
-    def __updateTitle(self,title):
-        self.title = title
-        return self.title
-    def __updateArtist(self,artist):
-        self.artist = artist
-        return self.artist
-    def __updateThumbalImg(self,thumbalImg):
-        self.thumbalImg = thumbalImg
-        return self.thumbalImg
-    def __updateDuration(self,song_duration):
-        song_duration = song_duration.info.length
-        duration = int(song_duration)
-        self.duration = duration
-        return self.duration
+        self.songsData = songsData()
     def __cleanUpdate(self,filename):
         return re.sub(r'[\\/*?:"<>|]',"",filename)
     def regexUrl(self):
@@ -55,29 +39,22 @@ class downloadSongsYb:
         self.completeUrl = self.httpUrl + self.id_url
         return self.completeUrl
     def __cleanNameArtist(self):
-        match = re.search(self.regexArtist, self.artist)
+        match = re.search(self.regexArtist, self.songsData.artist)
         if match:
-            self.artist = match.group(1)
-            return self.artist
+            self.songsData.artist = match.group(1)
+            return self.songsData.artist
         else:
-            return self.artist
+            return self.songsData.artist
     def __addMetaData(self,downloaded_File):
         streams = YouTube(self.completeUrl,on_complete_callback=on_progress)
         title = u"{}".format(streams.title)
         artist = u"{}".format(streams.author)
-        self.__updateTitle(self.__cleanUpdate(title))
-        self.__updateArtist(self.__cleanUpdate(artist))
+        self.songsData.updateTitle(self.__cleanUpdate(title))
+        self.songsData.updateArtist(self.__cleanUpdate(artist))
         self.__cleanNameArtist()
-        self.__updateThumbalImg(streams.thumbnail_url)
+        self.songsData.updateThumbalImg(streams.thumbnail_url)
         file_path = downloaded_File if downloaded_File.endswith(".m4a") else f"{downloaded_File}.m4a"
-        targetNmae = MP4(file_path)
-        self.__updateDuration(targetNmae)
-        targetNmae.delete()
-        self.title = self.title.encode('utf-8').decode('utf-8')
-        self.artist = self.artist.encode('utf-8').decode('utf-8')
-        targetNmae["\xa9nam"] = self.title
-        targetNmae["\xa9ART"] = self.artist
-        targetNmae.save()
+        self.songsData.updateMetaData(file_path)
     def download_thumbnail(self,url_thumbnail):
         try:
             ssl._create_default_https_context = ssl._create_unverified_context
