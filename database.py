@@ -2,8 +2,47 @@ import sqlite3
 import os
 import re
 import sys
-from mutagen.mp4 import MP4
-
+import cv2
+import numpy as np
+import requests
+import os
+from io import BytesIO
+from mutagen.mp4 import MP4, MP4Cover
+from mutagen.id3 import ID3, TIT2, TPE1, error, APIC
+from difflib import SequenceMatcher as sm
+class tagsong:
+    def __init__(self, thumbalUlr):
+        self.thumbalUlr = thumbalUlr
+        self.__setStringDefault = "sddefault.jpg"
+        self.__setStringMax = "maxresdefault.jpg"
+        self.height = int
+        self.width = int
+        self.__cropSize = 720
+    def replaceString(self):
+        return self.thumbalUlr.replace(self.__setStringDefault, self.__setStringMax)
+    def downloadImage(self):
+        response = requests.get(self.thumbalUlr)
+        image_np = np.asarray(bytearray(response.content), dtype=np.uint8)
+        return cv2.imdecode(image_np, cv2.IMREAD_COLOR)
+    def getDimension(self):
+        return self.image.shape
+    def calculateCoordinates(self):
+        return (self.width - self.__cropSize) // 2, (self.height - self.__cropSize) // 2
+    def cropImage(self):
+        x_start, y_start = self.calculateCoordinates()
+        return self.image[y_start:y_start + self.__cropSize, x_start:x_start + self.__cropSize]
+    def saveImage(self):
+        return cv2.imwrite("Songs/cropped_image.png", self.cropped_image)
+    def deleteTemp(self):
+        temp_dir = os.path.join(os.getcwd(), "Songs/cropped_image.png")
+        os.remove(temp_dir)
+    def run(self):
+        self.thumbalUlr = self.replaceString()
+        self.image = self.downloadImage()
+        self.height, self.width, _ = self.getDimension()
+        self.cropped_image = self.cropImage()
+        self.saveImage()
+        return self.cropped_image
 class dataBase:
     def __init__(self):
         self.connect = sqlite3.connect("idSongs.db")
@@ -95,10 +134,46 @@ class dataBase:
         ''')
         self.cursor.execute('DROP TABLE songs')
         self.cursor.execute('ALTER TABLE temp_songs RENAME TO songs')
-        self
+    def fetch_songs(self):
+        # Fetch title and thumbnail_url from the database
+        fetch_query = "SELECT name, thumbnail_url FROM songs"
+        self.cursor.execute(fetch_query)
+        return self.cursor.fetchall()
+    def updateThumbnails(self,directory="/Songs"):
+        songs_db = self.fetch_songs()
+        try:
+            current_path = os.getcwd()
+            new_dir_path = os.path.join(current_path, "Songs/")
+            for title, url in songs_db:
+                for root, dirs, files in os.walk(new_dir_path):
+                    for file in files:
+                        if file.endswith(".m4a") and title in file:
+                                coverImage = tagsong(url)
+                                coverImage.run()
+                                song_path = os.path.join(os.getcwd(), f"Songs/{file}")
+                                targetNmae = MP4(song_path)
+                                path_img = os.path.join(os.getcwd(), "Songs/cropped_image.png")
+                                with open(path_img, 'rb') as albumart:
+                                    targetNmae.tags['covr'] = [MP4Cover(albumart.read(), imageformat=MP4Cover.FORMAT_PNG)]
+                                targetNmae.save()
+                                coverImage.deleteTemp()
+                        elif sm(None,str(file),str(title)).ratio()>0.9 or sm(None,str(file),str(title)).ratio()>0.75:
+                            temp_title = file
+                            if file.endswith(".m4a") and temp_title in file:
+                                coverImage = tagsong(url)
+                                coverImage.run()
+                                song_path = os.path.join(os.getcwd(), f"Songs/{file}")
+                                targetNmae = MP4(song_path)
+                                path_img = os.path.join(os.getcwd(), "Songs/cropped_image.png")
+                                with open(path_img, 'rb') as albumart:
+                                    targetNmae.tags['covr'] = [MP4Cover(albumart.read(), imageformat=MP4Cover.FORMAT_PNG)]
+                                targetNmae.save()
+                                coverImage.deleteTemp()
+        except Exception as e:
+            print(f"Failed to download cover for '{title}': {e}")
 def main():
     dbs = dataBase()
-    print("Show database: showdb\nReorderIDS: reorderid\nDelete song: delete\nAdd song: add\nUpdate durations: updatedurations\nQuit: q")
+    print("Show database: showdb\nReorderIDS: reorderid\nDelete song: delete\nAdd song: add\nUpdate thumbal images: upthum\nUpdate durations: updatedurations\nQuit: q")
     for line in sys.stdin:
         if 'q' == line.rstrip():
             break
@@ -125,11 +200,17 @@ def main():
                 print("Song added")
             except:
                 print("Invalid input")
+        elif 'upthum' == line.rstrip():
+            try:
+                dbs.updateThumbnails()
+                print("Thumbnails updated")
+            except:
+                print("Invalid input")
         elif 'updatedurations' == line.rstrip():
             dbs.updateDurations()
             print("Durations updated")
         
-        print("Show database: showdb\nReorderIDS: reorderid\nDelete song: delete\nAdd song: add\nUpdate durations: updatedurations\nQuit: q")
+        print("Show database: showdb\nReorderIDS: reorderid\nDelete song: delete\nAdd song: add\nUpdate thumbal images: upthum\nUpdate durations: updatedurations\nQuit: q")
 
 if __name__ == "__main__":
     main()
