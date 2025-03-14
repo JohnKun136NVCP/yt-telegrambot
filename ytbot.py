@@ -45,13 +45,13 @@ async def download(update: Update, context: CallbackContext) -> None:
     songs.generateYbUrl()
     if not db.isOntheDatabase(songs.id_url):
         songs.download()
-        db.insertData(songs.title, songs.artist, songs.id_url,songs.duration,songs.thumbalImg)
+        db.insertData(songs.songsData.title, songs.songsData.artist, songs.id_url,songs.songsData.duration,songs.songsData.thumbalImg)
     isOnDB,result = db.verifyURL(songs.id_url)
     if isOnDB:
         song_id = result[0]
         if result[4] is None or result[5] is None:
             songs.download()
-            db.updateSong(song_id, songs.duration, songs.thumbalImg)
+            db.updateSong(song_id, songs.songsData.duration, songs.songsData.thumbalImg)
     if isOnDB:
         titleName, artistName,duration, thumbal= result[1], result[2],result[4],result[5]
         match_files = []
