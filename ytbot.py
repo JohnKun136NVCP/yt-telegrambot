@@ -36,8 +36,8 @@ async def changeCommands(application: Application) -> None:
     await application.bot.set_chat_menu_button()
 
 async def download(update: Update, context: CallbackContext) -> None:
-    url = update.message.text
     try:
+        url = update.message.text
         songs = downloadSongsYb(str(url))
         songs.regexUrl()
         db = dataBase()
