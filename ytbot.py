@@ -43,25 +43,39 @@ async def download(update: Update, context: CallbackContext) -> None:
         db = dataBase()
         songs.regexUrl()
         songs.generateYbUrl()
+
+        # Check if the song exists in the database
         if not db.isOntheDatabase(songs.id_url):
             songs.download()
-            db.insertData(songs.songsData.title, songs.songsData.artist, songs.id_url,songs.songsData.duration,songs.songsData.thumbalImg)
-        isOnDB,result = db.verifyURL(songs.id_url)
+            db.insertData(
+                songs.songsData.title,
+                songs.songsData.artist,
+                songs.id_url,
+                songs.songsData.duration,
+                songs.songsData.thumbalImg
+            )
+
+        isOnDB, result = db.verifyURL(songs.id_url)
         if isOnDB:
-            titleName, artistName,duration, thumbal= result[1], result[2],result[4],result[5]
+            titleName, artistName, duration, thumbal = (
+                result[1],
+                result[2],
+                result[4],
+                result[5],
+            )
+
+            # Search for matching files in the "Songs/" directory
             match_files = []
             current_path = os.getcwd()
             new_dir_path = os.path.join(current_path, "Songs/")
+            
             for root, dirs, files in os.walk(new_dir_path):
                 for file in files:
-                    if file.endswith(".m4a") and titleName in file:
-                        match_files.append(os.path.join(root, file))
-                        file_root, file_ext = os.path.splitext(file)
-                    elif sm(None,str(file),str(titleName)).ratio()>0.9:
-                        temp_title = file
-                        if file.endswith(".m4a") and temp_title in file:
+                    if file.endswith(".m4a"):
+                        similarity_ratio = sm(None, file, titleName+".m4a").ratio()
+                        if similarity_ratio > 0.9:  # Match threshold
                             match_files.append(os.path.join(root, file))
-                            file_root, file_ext = os.path.splitext(file)
+            # Send matches to the user
             if match_files:
                 for audio_path in match_files:
                     with open(audio_path, "rb") as audio:
@@ -73,10 +87,19 @@ async def download(update: Update, context: CallbackContext) -> None:
                             performer=artistName,
                             duration=duration,
                             thumbnail=thumbal,
-                            caption=f"Downloaded from YouTube\n @songytbbot")
+                            caption=f"Downloaded from YouTube\n @songytbbot"
+                        )
                 songs.cleanTempdir(thumbal)
-    except:
-        await update.message.reply_text("Sorry, an error occurred while processing the request. Please try again later.")
+            else:
+                await update.message.reply_text(
+                    "Sorry, no matches were found for this song."
+                )
+
+    except Exception as e:
+        # Error handling
+        await update.message.reply_text(
+            f"Sorry, an error occurred while processing the request. Details: {str(e)}"
+        )
 
 def main(TELEGRAM_TOKEN):
     try:
