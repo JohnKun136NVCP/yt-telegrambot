@@ -37,55 +37,52 @@ async def changeCommands(application: Application) -> None:
 
 async def download(update: Update, context: CallbackContext) -> None:
     url = update.message.text
-    #try:
-    songs = downloadSongsYb(str(url))
-    songs.regexUrl()
-    db = dataBase()
-    songs.regexUrl()
-    songs.generateYbUrl()
-    if not db.isOntheDatabase(songs.id_url):
-        songs.download()
-        db.insertData(songs.songsData.title, songs.songsData.artist, songs.id_url,songs.songsData.duration,songs.songsData.thumbalImg)
-    isOnDB,result = db.verifyURL(songs.id_url)
-    if isOnDB:
-        song_id = result[0]
-        if result[4] is None or result[5] is None:
+    try:
+        songs = downloadSongsYb(str(url))
+        songs.regexUrl()
+        db = dataBase()
+        songs.regexUrl()
+        songs.generateYbUrl()
+        if not db.isOntheDatabase(songs.id_url):
             songs.download()
-            db.updateSong(song_id, songs.songsData.duration, songs.songsData.thumbalImg)
-    if isOnDB:
-        titleName, artistName,duration, thumbal= result[1], result[2],result[4],result[5]
-        match_files = []
-        current_path = os.getcwd()
-        new_dir_path = os.path.join(current_path, "Songs/")
-        for root, dirs, files in os.walk(new_dir_path):
-            for file in files:
-                if file.endswith(".m4a") and titleName in file:
-                    match_files.append(os.path.join(root, file))
-                    file_root, file_ext = os.path.splitext(file)
-                elif sm(None,str(file),str(titleName)).ratio()>0.9:
-                    temp_title = file
-                    if file.endswith(".m4a") and temp_title in file:
+            db.insertData(songs.songsData.title, songs.songsData.artist, songs.id_url,songs.songsData.duration,songs.songsData.thumbalImg)
+        isOnDB,result = db.verifyURL(songs.id_url)
+        if isOnDB:
+            titleName, artistName,duration, thumbal= result[1], result[2],result[4],result[5]
+            match_files = []
+            current_path = os.getcwd()
+            new_dir_path = os.path.join(current_path, "Songs/")
+            for root, dirs, files in os.walk(new_dir_path):
+                for file in files:
+                    if file.endswith(".m4a") and titleName in file:
                         match_files.append(os.path.join(root, file))
                         file_root, file_ext = os.path.splitext(file)
-        if match_files:
-            for audio_path in match_files:
-                with open(audio_path, "rb") as audio:
-                    thumbal = songs.download_thumbnail(thumbal)
-                    await context.bot.send_audio(
-                        chat_id=update.message.chat_id,
-                        audio=audio_path,
-                        title=titleName,
-                        performer=artistName,
-                        duration=duration,
-                        thumbnail=thumbal,
-                        caption=f"Downloaded from YouTube\n @songytbbot")
-            songs.cleanTempdir(thumbal)
-    #except:
-        #await update.message.reply_text("Sorry, an error occurred while processing the request. Please try again later.")
+                    elif sm(None,str(file),str(titleName)).ratio()>0.9:
+                        temp_title = file
+                        if file.endswith(".m4a") and temp_title in file:
+                            match_files.append(os.path.join(root, file))
+                            file_root, file_ext = os.path.splitext(file)
+            if match_files:
+                for audio_path in match_files:
+                    with open(audio_path, "rb") as audio:
+                        thumbal = songs.download_thumbnail(thumbal)
+                        await context.bot.send_audio(
+                            chat_id=update.message.chat_id,
+                            audio=audio_path,
+                            title=titleName,
+                            performer=artistName,
+                            duration=duration,
+                            thumbnail=thumbal,
+                            caption=f"Downloaded from YouTube\n @songytbbot")
+                songs.cleanTempdir(thumbal)
+    except:
+        await update.message.reply_text("Sorry, an error occurred while processing the request. Please try again later.")
 
 def main(TELEGRAM_TOKEN):
-    application = Application.builder().token(str(TELEGRAM_TOKEN)).post_init(changeCommands).read_timeout(7).get_updates_connect_timeout(42).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download))
-    application.run_polling()
+    try:
+        application = Application.builder().token(str(TELEGRAM_TOKEN)).post_init(changeCommands).read_timeout(7).build()
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download))
+        application.run_polling()
+    except Exception as e:pass
