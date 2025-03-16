@@ -98,7 +98,7 @@ async def download(update: Update, context: CallbackContext) -> None:
     except Exception as e:
         # Error handling
         await update.message.reply_text(
-            f"Sorry, an error occurred while processing the request. Details: {str(e)}"
+            f"Sorry, an error occurred while processing the request."
         )
 
 def main(TELEGRAM_TOKEN):
