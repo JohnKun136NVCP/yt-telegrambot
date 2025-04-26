@@ -4,7 +4,6 @@ import shutil
 import os.path
 import ssl
 import re
-import sqlite3
 import requests
 from datetime import datetime,timedelta
 from mutagen.mp4 import MP4, MP4Cover
@@ -13,7 +12,9 @@ from pytubefix import YouTube
 from pytubefix.cli import on_progress
 from metaSong import songsData
 
-
+#SSL certificates 
+# Certificates if not installed on Operating System
+ssl._create_default_https_context = ssl._create_unverified_context
 
 class downloadSongsYb:
     def __init__(self, url):
@@ -99,54 +100,3 @@ class downloadSongsYb:
         downloaded_File = ys.download()
         self.__addMetaData(downloaded_File)
         self.movedFile()
-
-
-class dataBase():
-    def __init__(self):
-        self.connect = sqlite3.connect("idSongs.db")
-        self.cursor = self.connect.cursor()
-        self.db_create_query = '''CREATE TABLE IF NOT EXISTS songs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT,
-        channel TEXT,
-        uri TEXT,
-        duration INTEGER,
-        thumbnail_url TEXT
-        );'''
-        self.cursor.execute(self.db_create_query)
-    def isOntheDatabase(self,uri):
-        self.cursor.execute('SELECT * FROM songs WHERE uri = ?',(uri,))
-        result = self.cursor.fetchone()
-        if result:
-            return True
-        else:
-            return False
-    def insertData(self,title,artist,id_url,duration,thumbalImg):
-        self.cursor.execute('''
-        SELECT * FROM songs WHERE name = ? AND channel = ? AND uri = ? AND duration = ? AND thumbnail_url = ?''', (title,artist,id_url,duration,thumbalImg))
-        result = self.cursor.fetchone()
-        if result:
-            return True
-        else:
-            title = title.encode('utf-8').decode('utf-8')
-            artist = artist.encode('utf-8').decode('utf-8')
-            self.cursor.execute('''
-            INSERT INTO songs (name,channel,uri,duration,thumbnail_url) VALUES (?,?,?,?,?)''',(title,artist,id_url,duration,thumbalImg))
-            self.connect.commit()
-            return False
-    def verifyURL(self,id_url):
-        self.cursor.execute('SELECT * FROM songs WHERE uri = ?',(id_url,))
-        result = self.cursor.fetchone()
-        if result:return (True,result)
-        else:return (False,False)
-    def updateSong(self, song_id, duration, thumbnail_url):
-        update_query = '''UPDATE songs SET duration = ?, thumbnail_url = ? WHERE id = ?'''
-        self.cursor.execute(update_query, (duration, thumbnail_url, song_id))
-        self.connect.commit()
-    def deletingDatabase(self):
-        self.cursor.execute('SELECT * FROM songs WHERE id = 40')
-        result = self.cursor.fetchone() 
-        if result:
-            self.cursor.execute('DELETE FROM songs')
-            self.connect.commit()
-        else:pass
