@@ -9,3 +9,6 @@ pyvenv.cfg
 bin/
 lib64/
 testing.py
+#Ignore files
+*.m4a
+*.flac
