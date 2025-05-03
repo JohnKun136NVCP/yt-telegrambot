@@ -1,20 +1,72 @@
+"""
+This module provides functionality for handling song metadata and thumbnail images.
+It includes two classes: `tagsong` for processing thumbnail images and `songsData`
+for managing and updating song metadata.
+
+Classes:
+    tagsong:
+        A class for downloading, cropping, and saving thumbnail images.
+
+        Methods:
+            __init__(thumbalUlr):
+                Initializes the `tagsong` object with a thumbnail URL.
+            replaceString():
+                Replaces the default string in the thumbnail URL.
+            downloadImage():
+                Downloads the image from the thumbnail URL.
+            getDimension():
+                Retrieves the dimensions of the downloaded image.
+            calculateCoordinates():
+                Calculates the coordinates for cropping the image.
+            cropImage():
+                Crops the image to a predefined size.
+            saveImage():
+                Saves the cropped image to a file.
+            deleteTemp():
+                Deletes the temporary cropped image file.
+            run():
+                Executes the full process of downloading, cropping, and saving the image.
+
+    songsData(tagsong):
+        A subclass of `tagsong` for managing song metadata, including title, artist,
+        duration, and album art.
+
+        Methods:
+            __init__():
+                Initializes the `songsData` object with default metadata attributes.
+            updateTitle(title):
+                Updates the title of the song.
+            updateArtist(artist):
+                Updates the artist of the song.
+            updateThumbalImg(thumbalImg):
+                Updates the thumbnail image URL.
+            updateDuration(song_duration):
+                Updates the duration of the song based on its audio file.
+            updateMetaData(audio_path):
+                Updates the metadata of an MP4 audio file, including title, artist,
+                and album art.
+            updateFlacCover(audio_path):
+                Updates the album art of a FLAC audio file.
+
+"""
 import cv2
 import numpy as np
 import requests
 import os
 from io import BytesIO
 from mutagen.mp4 import MP4, MP4Cover
+from mutagen import File
+from mutagen.flac import Picture, FLAC
 from mutagen.id3 import ID3, TIT2, TPE1, error, APIC
 class tagsong:
     def __init__(self, thumbalUlr):
         self.thumbalUlr = thumbalUlr
         self.__setStringDefault = "sddefault.jpg"
-        self.__setStringMax = "maxresdefault.jpg"
         self.height = int
         self.width = int
-        self.__cropSize = 720
+        self.__cropSize = 350
     def replaceString(self):
-        return self.thumbalUlr.replace(self.__setStringDefault, self.__setStringMax)
+        return self.thumbalUlr.replace(self.__setStringDefault, self.__setStringDefault)
     def downloadImage(self):
         response = requests.get(self.thumbalUlr)
         image_np = np.asarray(bytearray(response.content), dtype=np.uint8)
@@ -73,4 +125,17 @@ class songsData(tagsong):
         with open(path_img, 'rb') as albumart:
             targetNmae.tags['covr'] = [MP4Cover(albumart.read(), imageformat=MP4Cover.FORMAT_PNG)]
         targetNmae.save()
+        image_photo.deleteTemp()
+    def updateFlacCover(self,audio_path):
+        target = File(audio_path)
+        self.updateThumbalImg(self.thumbalImg)
+        image_photo = tagsong(self.thumbalImg)
+        image_photo.run()
+        path_img = os.path.join(os.getcwd(), "cropped_image.png")
+        img = Picture()
+        img.type = 3
+        with open(path_img, 'rb') as albumart:
+                img.data = albumart.read()
+        target.add_picture(img)
+        target.save()
         image_photo.deleteTemp()

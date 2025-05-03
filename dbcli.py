@@ -6,20 +6,22 @@ import cv2
 import numpy as np
 import requests
 import os
+import subprocess
 from io import BytesIO
 from mutagen.mp4 import MP4, MP4Cover
+from mutagen import File
+from mutagen.flac import Picture, FLAC
 from mutagen.id3 import ID3, TIT2, TPE1, error, APIC
 from difflib import SequenceMatcher as sm
 class tagsong:
     def __init__(self, thumbalUlr):
         self.thumbalUlr = thumbalUlr
         self.__setStringDefault = "sddefault.jpg"
-        self.__setStringMax = "maxresdefault.jpg"
         self.height = int
         self.width = int
-        self.__cropSize = 720
+        self.__cropSize = 350
     def replaceString(self):
-        return self.thumbalUlr.replace(self.__setStringDefault, self.__setStringMax)
+        return self.thumbalUlr.replace(self.__setStringDefault, self.__setStringDefault)
     def downloadImage(self):
         response = requests.get(self.thumbalUlr)
         image_np = np.asarray(bytearray(response.content), dtype=np.uint8)
@@ -147,33 +149,54 @@ class dataBase:
             for title, url in songs_db:
                 for root, dirs, files in os.walk(new_dir_path):
                     for file in files:
-                        if file.endswith(".m4a") and title in file:
+                        if file.endswith(".flac") and title in file:
                                 coverImage = tagsong(url)
                                 coverImage.run()
                                 song_path = os.path.join(os.getcwd(), f"Songs/{file}")
-                                targetNmae = MP4(song_path)
+                                target = File(song_path)
                                 path_img = os.path.join(os.getcwd(), "Songs/cropped_image.png")
+                                img = Picture()
+                                img.type = 3
                                 with open(path_img, 'rb') as albumart:
-                                    targetNmae.tags['covr'] = [MP4Cover(albumart.read(), imageformat=MP4Cover.FORMAT_PNG)]
-                                targetNmae.save()
+                                        img.data = albumart.read()
+                                target.add_picture(img)
+                                target.save()
                                 coverImage.deleteTemp()
                         elif sm(None,str(file),str(title)).ratio()>0.9 or sm(None,str(file),str(title)).ratio()>0.75:
                             temp_title = file
-                            if file.endswith(".m4a") and temp_title in file:
+                            if file.endswith(".flac") and temp_title in file:
                                 coverImage = tagsong(url)
                                 coverImage.run()
                                 song_path = os.path.join(os.getcwd(), f"Songs/{file}")
-                                targetNmae = MP4(song_path)
+                                target = File(song_path)
                                 path_img = os.path.join(os.getcwd(), "Songs/cropped_image.png")
+                                img = Picture()
+                                img.type = 3
                                 with open(path_img, 'rb') as albumart:
-                                    targetNmae.tags['covr'] = [MP4Cover(albumart.read(), imageformat=MP4Cover.FORMAT_PNG)]
-                                targetNmae.save()
+                                        img.data = albumart.read()
+                                target.add_picture(img)
+                                target.save()
+                                coverImage.deleteTemp()
                                 coverImage.deleteTemp()
         except Exception as e:
             print(f"Failed to download cover for '{title}': {e}")
+    def m4aToFlac(self, directory="/Songs"):
+        for filename in os.listdir(directory):
+            if filename.endswith(".m4a"):
+                audio_path = os.path.join(directory, filename)
+                flac_data = audio_path.replace(".m4a", ".flac")
+                try:
+                    if sys.platform == "linux" or sys.platform == "linux2" or sys.platform == "win32" or sys.platform == "darwin":
+                        subprocess.run(["ffmpeg", "-i", audio_path, "-f", "flac", flac_data], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        self.updateThumbnails()
+                except Exception as e:
+                    print(f"Error converting {audio_path} to FLAC: {e}")
+                    print("Please check if ffmpeg is installed and available in your PATH.")
+                    continue
+                os.remove(audio_path)  # Delete original .m4a file
 def main():
     dbs = dataBase()
-    print("Show database: showdb\nReorderIDS: reorderid\nDelete song: delete\nAdd song: add\nUpdate thumbal images: upthum\nUpdate durations: updatedurations\nQuit: q")
+    print("Show database: showdb\nReorderIDS: reorderid\nDelete song: delete\nAdd song: add\nUpdate thumbal images: upthum\nUpdate durations: updatedurations\nUpdate to Flac: flc\nQuit: q")
     for line in sys.stdin:
         if 'q' == line.rstrip():
             break
@@ -209,8 +232,10 @@ def main():
         elif 'updatedurations' == line.rstrip():
             dbs.updateDurations()
             print("Durations updated")
-        
-        print("Show database: showdb\nReorderIDS: reorderid\nDelete song: delete\nAdd song: add\nUpdate thumbal images: upthum\nUpdate durations: updatedurations\nQuit: q")
+        elif 'flc' == line.rstrip():
+            dbs.m4aToFlac()
+            print("Converted to FLAC")
+        print("Show database: showdb\nReorderIDS: reorderid\nDelete song: delete\nAdd song: add\nUpdate thumbal images: upthum\nUpdate durations: updatedurations\nUpdate to Flac: flc\nQuit: q")
 
 if __name__ == "__main__":
     main()

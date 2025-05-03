@@ -4,16 +4,15 @@ import shutil
 import os.path
 import ssl
 import re
-import sqlite3
 import requests
-from datetime import datetime,timedelta
-from mutagen.mp4 import MP4, MP4Cover
-from mutagen.id3 import ID3, TIT2, TPE1, error
+import subprocess
 from pytubefix import YouTube
 from pytubefix.cli import on_progress
 from metaSong import songsData
 
-
+#SSL certificates 
+# Certificates if not installed on Operating System
+ssl._create_default_https_context = ssl._create_unverified_context
 
 class downloadSongsYb:
     def __init__(self, url):
@@ -55,9 +54,21 @@ class downloadSongsYb:
         self.songsData.updateThumbalImg(streams.thumbnail_url)
         file_path = downloaded_File if downloaded_File.endswith(".m4a") else f"{downloaded_File}.m4a"
         self.songsData.updateMetaData(file_path)
+    def __convertToFlac(self, audio_path):
+        """
+        Convert the audio file to FLAC format using ffmpeg.
+        """
+        try:
+            flac_data = audio_path.replace(".m4a", ".flac")
+            if sys.platform == "linux" or sys.platform == "linux2" or sys.platform == "win32" or sys.platform == "darwin":
+                subprocess.run(["ffmpeg","-i",audio_path,"-f","flac","{}.flac".format(self.songsData.title)],stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.songsData.updateFlacCover(flac_data)
+                os.remove(audio_path)
+        except Exception as e:
+            print(f"Error converting to FLAC: {e}")
+            print("Check if ffmpeg is installed and in your PATH.")
     def download_thumbnail(self,url_thumbnail):
         try:
-            ssl._create_default_https_context = ssl._create_unverified_context
             if url_thumbnail is not None:
                 temp_dir = os.path.join(os.getcwd(), "temp")
                 os.makedirs(temp_dir, exist_ok=True)
@@ -88,7 +99,7 @@ class downloadSongsYb:
             if not os.path.exists(self.path):
                 os.makedirs(self.path)  # Create the directory if it doesn't exist
             for filename in os.listdir(current_path):
-                if filename.endswith('.m4a'):
+                if filename.endswith('.flac'):
                     source_file = os.path.join(current_path, filename)  # Define the source file path
                     dest_file = os.path.join(new_dir_path, filename)  # Define the destination file path
                     shutil.move(source_file, dest_file)  # Move the file to the new directory
@@ -98,55 +109,5 @@ class downloadSongsYb:
         ys = yt.streams.get_audio_only()
         downloaded_File = ys.download()
         self.__addMetaData(downloaded_File)
+        self.__convertToFlac(downloaded_File)
         self.movedFile()
-
-
-class dataBase():
-    def __init__(self):
-        self.connect = sqlite3.connect("idSongs.db")
-        self.cursor = self.connect.cursor()
-        self.db_create_query = '''CREATE TABLE IF NOT EXISTS songs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT,
-        channel TEXT,
-        uri TEXT,
-        duration INTEGER,
-        thumbnail_url TEXT
-        );'''
-        self.cursor.execute(self.db_create_query)
-    def isOntheDatabase(self,uri):
-        self.cursor.execute('SELECT * FROM songs WHERE uri = ?',(uri,))
-        result = self.cursor.fetchone()
-        if result:
-            return True
-        else:
-            return False
-    def insertData(self,title,artist,id_url,duration,thumbalImg):
-        self.cursor.execute('''
-        SELECT * FROM songs WHERE name = ? AND channel = ? AND uri = ? AND duration = ? AND thumbnail_url = ?''', (title,artist,id_url,duration,thumbalImg))
-        result = self.cursor.fetchone()
-        if result:
-            return True
-        else:
-            title = title.encode('utf-8').decode('utf-8')
-            artist = artist.encode('utf-8').decode('utf-8')
-            self.cursor.execute('''
-            INSERT INTO songs (name,channel,uri,duration,thumbnail_url) VALUES (?,?,?,?,?)''',(title,artist,id_url,duration,thumbalImg))
-            self.connect.commit()
-            return False
-    def verifyURL(self,id_url):
-        self.cursor.execute('SELECT * FROM songs WHERE uri = ?',(id_url,))
-        result = self.cursor.fetchone()
-        if result:return (True,result)
-        else:return (False,False)
-    def updateSong(self, song_id, duration, thumbnail_url):
-        update_query = '''UPDATE songs SET duration = ?, thumbnail_url = ? WHERE id = ?'''
-        self.cursor.execute(update_query, (duration, thumbnail_url, song_id))
-        self.connect.commit()
-    def deletingDatabase(self):
-        self.cursor.execute('SELECT * FROM songs WHERE id = 40')
-        result = self.cursor.fetchone() 
-        if result:
-            self.cursor.execute('DELETE FROM songs')
-            self.connect.commit()
-        else:pass
