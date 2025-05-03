@@ -36,6 +36,13 @@ Make sure you have the following installed:
     ```bash
     python3 main.py
     ```
+> [!NOTE]  
+> If you want to enable JobQueue then you will need to install from pip the module.
+```
+pip install "python-telegram-bot[job-queue]"
+```
+ 
+
 # Suggestions
 Please create a virtual enviroment and enjoy the cuteness! 🌸💖
 
