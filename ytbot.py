@@ -64,20 +64,21 @@ async def getUser(id,username):
     userDatabase.isOnTableOrInsert()
 async def messageToUser(context: ContextTypes.DEFAULT_TYPE):
     info = messagesAndQuotes()
-    connect = sqlite3.connect("users.db")
-    cursor = connect.cursor()
-    cursor.execute('SELECT telegram_id FROM users')
-    result = cursor.fetchall()
-    if result and os.path.exists(info.userMessage):
-        idUsers = [row[0] for row in result]
-        if info.showMessageUser() != "":
-            for idUser in idUsers:
-                    await context.bot.send_message(chat_id=idUser, text=f'{info.showMessageUser()}',parse_mode="MarkdownV2")
-        else:
-            info.get_quote()
-            for idUser in idUsers:
-                await context.bot.send_message(chat_id=idUser, text=f'Quote of the Week:\n{info.quouteString}')
-
+    try:
+        connect = sqlite3.connect("users.db")
+        cursor = connect.cursor()
+        cursor.execute('SELECT telegram_id FROM users')
+        result = cursor.fetchall()
+        if result and os.path.exists(info.userMessage):
+            idUsers = [row[0] for row in result]
+            if info.showMessageUser() != "":
+                for idUser in idUsers:
+                        await context.bot.send_message(chat_id=idUser, text=f'{info.showMessageUser()}',parse_mode="MarkdownV2")
+            elif info.get_quote()== "" and idUsers:
+                info.get_quote()
+                for idUser in idUsers:
+                    await context.bot.send_message(chat_id=idUser, text=f'Quote of the Week:\n{info.quouteString}')
+    except sqlite3.Error as e:pass
 async def start(update: Update, context: CallbackContext) -> None:
     user = update.message.from_user
     await getUser(user['id'],user['username'])
@@ -97,68 +98,67 @@ async def download(update: Update, context: CallbackContext) -> None:
     user = update.message.from_user
     await getUser(user['id'],user['username'])
     url = update.message.text
-    songs = downloadSongsYb(str(url))
-    songs.regexUrl()
-    db = ytdatabase()
-    songs.generateYbUrl()
-    # Check if the song exists in the database
-    if not db.isOntheDatabase(songs.id_url):
-        songs.download()
-        db.insertData(
-            songs.songsData.title,
-            songs.songsData.artist,
-            songs.id_url,
-            songs.songsData.duration,
-            songs.songsData.thumbalImg
-        )
-    isOnDB, result = db.verifyURL(songs.id_url)
-    if isOnDB:
-        titleName, artistName, duration, thumbal = (
-            result[1],
-            result[2],
-            result[4],
-            result[5],
-        )
-        # Search for matching files in the "Songs/" directory
-        match_files = []
-        current_path = os.getcwd()
-        new_dir_path = os.path.join(current_path, "Songs/")
-        
-        for root, dirs, files in os.walk(new_dir_path):
-            for file in files:
-                if file.endswith(".flac"):
-                    similarity_ratio = sm(None, file, titleName+".flac").ratio()
-                    if similarity_ratio > 0.9:  # Match threshold
-                        match_files.append(os.path.join(root, file))
-        # Send matches to the user
-        if match_files:
-            for audio_path in match_files:
-                with open(audio_path, "rb") as audio:
-                    thumbal = songs.download_thumbnail(thumbal)
-                    await context.bot.send_audio(
-                        chat_id=update.message.chat_id,
-                        audio=audio,
-                        title=titleName,
-                        performer=artistName,
-                        duration=duration,
-                        thumbnail=thumbal,
-                        caption=f"Downloaded from YouTube\n @songytbbot"
-                    )
-            songs.cleanTempdir(thumbal)
-        else:
-            await update.message.reply_text(
-                "Sorry, no matches were found for this song."
+    try:
+        songs = downloadSongsYb(str(url))
+        songs.regexUrl()
+        db = ytdatabase()
+        songs.generateYbUrl()
+        # Check if the song exists in the database
+        if not db.isOntheDatabase(songs.id_url):
+            songs.download()
+            db.insertData(
+                songs.songsData.title,
+                songs.songsData.artist,
+                songs.id_url,
+                songs.songsData.duration,
+                songs.songsData.thumbalImg
             )
+        isOnDB, result = db.verifyURL(songs.id_url)
+        if isOnDB:
+            titleName, artistName, duration, thumbal = (
+                result[1],
+                result[2],
+                result[4],
+                result[5],
+            )
+            # Search for matching files in the "Songs/" directory
+            match_files = []
+            current_path = os.getcwd()
+            new_dir_path = os.path.join(current_path, "Songs/")
+            
+            for root, dirs, files in os.walk(new_dir_path):
+                for file in files:
+                    if file.endswith(".flac"):
+                        similarity_ratio = sm(None, file, titleName+".flac").ratio()
+                        if similarity_ratio > 0.9:  # Match threshold
+                            match_files.append(os.path.join(root, file))
+            # Send matches to the user
+            if match_files:
+                for audio_path in match_files:
+                    with open(audio_path, "rb") as audio:
+                        thumbal = songs.download_thumbnail(thumbal)
+                        await context.bot.send_audio(
+                            chat_id=update.message.chat_id,
+                            audio=audio,
+                            title=titleName,
+                            performer=artistName,
+                            duration=duration,
+                            thumbnail=thumbal,
+                            caption=f"Downloaded from YouTube\n @songytbbot"
+                        )
+                songs.cleanTempdir(thumbal)
+            else:
+                await update.message.reply_text(
+                    "Sorry, no matches were found for this song."
+                )
 
-    #except Exception as e:
+    except Exception as e:
         # Error handling
-        #await update.message.reply_text(
-            #f"Sorry, an error occurred while processing the request."
-        #)
+        await update.message.reply_text(f"Sorry, an error occurred while processing the request.")
 
 def main(TELEGRAM_TOKEN):
     try:
-        application = Application.builder().token(str(TELEGRAM_TOKEN)).post_init(changeCommands).read_timeout(7).build()
+        application = Application.builder().token(str(TELEGRAM_TOKEN)).post_init(changeCommands).read_timeout(7).write_timeout(29).build()
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
         job_queue = application.job_queue
