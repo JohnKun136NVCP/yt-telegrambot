@@ -1,3 +1,33 @@
+"""
+This module provides two classes, `usrdatabase` and `ytdatabase`, for managing SQLite databases.
+Classes:
+    - usrdatabase: Handles user-related database operations.
+    - ytdatabase: Handles YouTube song-related database operations.
+Classes and Methods:
+    1. usrdatabase:
+        - __init__(self, id_user, username):
+            Initializes the user database connection and creates the `users` table if it does not exist.
+        - isOnTableOrInsert(self):
+            Checks if a user exists in the `users` table. If not, inserts the user into the table.
+    2. ytdatabase:
+        - __init__(self):
+            Initializes the song database connection and creates the `songs` table if it does not exist.
+        - isOntheDatabase(self, uri):
+            Checks if a song with the given URI exists in the `songs` table.
+        - insertData(self, title, artist, id_url, duration, thumbalImg):
+            Inserts a song into the `songs` table if it does not already exist.
+        - verifyURL(self, id_url):
+            Verifies if a song with the given URI exists in the `songs` table and returns the result.
+        - updateSong(self, song_id, duration, thumbnail_url):
+            Updates the duration and thumbnail URL of a song in the `songs` table.
+        - deletingDatabase(self):
+            Deletes all entries in the `songs` table if an entry with ID 40 exists.
+Note:
+    - The `users.db` database is used for storing user information.
+    - The `idSongs.db` database is used for storing song information.
+
+"""
+
 import sqlite3
 class usrdatabase:
     def __init__(self,id_user,username):
@@ -70,49 +100,3 @@ class ytdatabase:
         if result:
             self.cursor.execute('DELETE FROM songs')
             self.connect.commit()
-"""
-TOKEN = "YOUR_BOT_TOKEN"
-
-# Connect to SQLite database
-conn = sqlite3.connect("user_data.db")
-cursor = conn.cursor()
-
-# Create table if it doesn't exist
-cursor.execute("""""")
-conn.commit()
-
-def start(update: Update, context: CallbackContext):
-    telegram_id = update.message.chat_id
-
-    # Insert user ID if not already present
-    cursor.execute("INSERT OR IGNORE INTO users (telegram_id) VALUES (?)", (telegram_id,))
-    conn.commit()
-    
-    update.message.reply_text("You have been registered!")
-
-def check_and_send(update: Update, context: CallbackContext):
-    file_path = "message.txt"
-
-    # Check if the file exists and is not empty
-    if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
-        with open(file_path, "r") as file:
-            message = file.read().strip()
-
-        if message:
-            update.message.reply_text(message)
-    else:
-        update.message.reply_text("No message to send.")
-
-def main():
-    updater = Updater(TOKEN, use_context=True)
-    dispatcher = updater.dispatcher
-
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(CommandHandler("check", check_and_send))
-
-    updater.start_polling()
-    updater.idle()
-
-if __name__ == "__main__":
-    main()
-"""
