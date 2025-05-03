@@ -83,7 +83,7 @@ class dataBase:
             self.connect.commit()
             song_title = results[1]
             current_path = os.getcwd()
-            file_path = os.path.join(current_path, "Songs/", self.cleanString(song_title) + ".flac")
+            file_path = os.path.join(current_path, "Songs/", self.cleanString(song_title) + ".m4a")
 
             if os.path.exists(file_path):
                 os.remove(file_path)

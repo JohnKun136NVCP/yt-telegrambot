@@ -127,8 +127,8 @@ async def download(update: Update, context: CallbackContext) -> None:
         
         for root, dirs, files in os.walk(new_dir_path):
             for file in files:
-                if file.endswith(".flac"):
-                    similarity_ratio = sm(None, file, titleName+".flac").ratio()
+                if file.endswith(".m4a"):
+                    similarity_ratio = sm(None, file, titleName+".m4a").ratio()
                     if similarity_ratio > 0.9:  # Match threshold
                         match_files.append(os.path.join(root, file))
         # Send matches to the user

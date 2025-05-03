@@ -99,7 +99,7 @@ class downloadSongsYb:
             if not os.path.exists(self.path):
                 os.makedirs(self.path)  # Create the directory if it doesn't exist
             for filename in os.listdir(current_path):
-                if filename.endswith('.flac'):
+                if filename.endswith('.m4a'):
                     source_file = os.path.join(current_path, filename)  # Define the source file path
                     dest_file = os.path.join(new_dir_path, filename)  # Define the destination file path
                     shutil.move(source_file, dest_file)  # Move the file to the new directory
@@ -109,5 +109,5 @@ class downloadSongsYb:
         ys = yt.streams.get_audio_only()
         downloaded_File = ys.download()
         self.__addMetaData(downloaded_File)
-        self.__convertToFlac(downloaded_File)
+        #self.__convertToFlac(downloaded_File)
         self.movedFile()
