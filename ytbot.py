@@ -1,9 +1,44 @@
+"""
+This script implements a Telegram bot that allows users to download audio files from YouTube videos. 
+It includes functionalities for user management, message broadcasting, and audio file handling.
+Modules:
+- logging: For logging bot activities.
+- os: For file and directory operations.
+- sqlite3: For database interactions.
+- difflib: For comparing file names to find matches.
+- datetime: For time-related operations.
+- telegram: For interacting with the Telegram Bot API.
+- telegram.ext: For handling bot commands and messages.
+Functions:
+- getUser(id, username): Ensures the user is in the database or inserts them if not.
+- messageToUser(context): Sends a weekly message or quote to all users in the database.
+- start(update, context): Handles the /start command, welcoming the user and explaining the bot's functionality.
+- help_command(update, context): Handles the /help command, providing instructions on how to use the bot.
+- changeCommands(application): Sets the bot's commands and chat menu button.
+- download(update, context): Handles YouTube video links sent by users, downloads the audio, and sends it back to the user.
+- main(TELEGRAM_TOKEN): Initializes and runs the bot, setting up handlers and scheduling weekly messages.
+Classes and External Dependencies:
+- messagesAndQuotes: Handles messages and quotes for users.
+- downloadSongsYb: Manages YouTube audio downloading.
+- ytdatabase: Handles YouTube-related database operations.
+- usrdatabase: Manages user-related database operations.
+Logging:
+- Logs bot activities to a file named "botlogs.log".
+- Suppresses warnings from the "httpx" library.
+Job Queue:
+- Schedules a weekly task to send messages or quotes to users.
+Error Handling:
+- Basic error handling is implemented to prevent the bot from crashing on exceptions.
+"""
 import logging
 import os
+import sqlite3
 from difflib import SequenceMatcher as sm
 from getSongs import downloadSongsYb
+from messages import messagesAndQuotes
 from databases import ytdatabase
 from databases import usrdatabase
+from datetime import time
 from telegram import Update, BotCommand, Bot
 from telegram.ext import (
     Application,
@@ -27,6 +62,21 @@ logger = logging.getLogger(__name__)
 async def getUser(id,username):
     userDatabase = usrdatabase(id,username)
     userDatabase.isOnTableOrInsert()
+async def messageToUser(context: ContextTypes.DEFAULT_TYPE):
+    info = messagesAndQuotes()
+    connect = sqlite3.connect("users.db")
+    cursor = connect.cursor()
+    cursor.execute('SELECT telegram_id FROM users')
+    result = cursor.fetchall()
+    if result and os.path.exists(info.userMessage):
+        idUsers = [row[0] for row in result]
+        if info.showMessageUser() != "":
+            for idUser in idUsers:
+                    await context.bot.send_message(chat_id=idUser, text=f'{info.showMessageUser()}',parse_mode="MarkdownV2")
+        else:
+            info.get_quote()
+            for idUser in idUsers:
+                await context.bot.send_message(chat_id=idUser, text=f'Quote of the Week:\n{info.quouteString}')
 
 async def start(update: Update, context: CallbackContext) -> None:
     user = update.message.from_user
@@ -76,8 +126,8 @@ async def download(update: Update, context: CallbackContext) -> None:
         
         for root, dirs, files in os.walk(new_dir_path):
             for file in files:
-                if file.endswith(".m4a"):
-                    similarity_ratio = sm(None, file, titleName+".m4a").ratio()
+                if file.endswith(".flac"):
+                    similarity_ratio = sm(None, file, titleName+".flac").ratio()
                     if similarity_ratio > 0.9:  # Match threshold
                         match_files.append(os.path.join(root, file))
         # Send matches to the user
@@ -87,7 +137,7 @@ async def download(update: Update, context: CallbackContext) -> None:
                     thumbal = songs.download_thumbnail(thumbal)
                     await context.bot.send_audio(
                         chat_id=update.message.chat_id,
-                        audio=audio_path,
+                        audio=audio,
                         title=titleName,
                         performer=artistName,
                         duration=duration,
@@ -111,6 +161,12 @@ def main(TELEGRAM_TOKEN):
         application = Application.builder().token(str(TELEGRAM_TOKEN)).post_init(changeCommands).read_timeout(7).build()
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
+        job_queue = application.job_queue
+        job_queue.run_repeating(
+            messageToUser,
+            interval=604800,
+            first=4
+        )
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download))
         application.run_polling()
     except Exception as e:pass
