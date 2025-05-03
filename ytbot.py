@@ -98,63 +98,61 @@ async def download(update: Update, context: CallbackContext) -> None:
     user = update.message.from_user
     await getUser(user['id'],user['username'])
     url = update.message.text
-    try:
-        songs = downloadSongsYb(str(url))
-        songs.regexUrl()
-        db = ytdatabase()
-        songs.generateYbUrl()
-        # Check if the song exists in the database
-        if not db.isOntheDatabase(songs.id_url):
-            songs.download()
-            db.insertData(
-                songs.songsData.title,
-                songs.songsData.artist,
-                songs.id_url,
-                songs.songsData.duration,
-                songs.songsData.thumbalImg
+    songs = downloadSongsYb(str(url))
+    songs.regexUrl()
+    db = ytdatabase()
+    songs.generateYbUrl()
+    # Check if the song exists in the database
+    if not db.isOntheDatabase(songs.id_url):
+        songs.download()
+        db.insertData(
+            songs.songsData.title,
+            songs.songsData.artist,
+            songs.id_url,
+            songs.songsData.duration,
+            songs.songsData.thumbalImg
+        )
+    isOnDB, result = db.verifyURL(songs.id_url)
+    if isOnDB:
+        titleName, artistName, duration, thumbal = (
+            result[1],
+            result[2],
+            result[4],
+            result[5],
+        )
+        # Search for matching files in the "Songs/" directory
+        match_files = []
+        current_path = os.getcwd()
+        new_dir_path = os.path.join(current_path, "Songs/")
+        
+        for root, dirs, files in os.walk(new_dir_path):
+            for file in files:
+                if file.endswith(".flac"):
+                    similarity_ratio = sm(None, file, titleName+".flac").ratio()
+                    if similarity_ratio > 0.9:  # Match threshold
+                        match_files.append(os.path.join(root, file))
+        # Send matches to the user
+        if match_files:
+            for audio_path in match_files:
+                with open(audio_path, "rb") as audio:
+                    thumbal = songs.download_thumbnail(thumbal)
+                    await context.bot.send_audio(
+                        chat_id=update.message.chat_id,
+                        audio=audio,
+                        title=titleName,
+                        performer=artistName,
+                        duration=duration,
+                        thumbnail=thumbal,
+                        caption=f"Downloaded from YouTube\n @songytbbot"
+                    )
+            songs.cleanTempdir(thumbal)
+        else:
+            await update.message.reply_text(
+                "Sorry, no matches were found for this song."
             )
-        isOnDB, result = db.verifyURL(songs.id_url)
-        if isOnDB:
-            titleName, artistName, duration, thumbal = (
-                result[1],
-                result[2],
-                result[4],
-                result[5],
-            )
-            # Search for matching files in the "Songs/" directory
-            match_files = []
-            current_path = os.getcwd()
-            new_dir_path = os.path.join(current_path, "Songs/")
-            
-            for root, dirs, files in os.walk(new_dir_path):
-                for file in files:
-                    if file.endswith(".flac"):
-                        similarity_ratio = sm(None, file, titleName+".flac").ratio()
-                        if similarity_ratio > 0.9:  # Match threshold
-                            match_files.append(os.path.join(root, file))
-            # Send matches to the user
-            if match_files:
-                for audio_path in match_files:
-                    with open(audio_path, "rb") as audio:
-                        thumbal = songs.download_thumbnail(thumbal)
-                        await context.bot.send_audio(
-                            chat_id=update.message.chat_id,
-                            audio=audio,
-                            title=titleName,
-                            performer=artistName,
-                            duration=duration,
-                            thumbnail=thumbal,
-                            caption=f"Downloaded from YouTube\n @songytbbot"
-                        )
-                songs.cleanTempdir(thumbal)
-            else:
-                await update.message.reply_text(
-                    "Sorry, no matches were found for this song."
-                )
-
-    except Exception as e:
+    #except Exception as e:
         # Error handling
-        await update.message.reply_text(f"Sorry, an error occurred while processing the request.")
+        #await update.message.reply_text(f"Sorry, an error occurred while processing the request.")
 
 def main(TELEGRAM_TOKEN):
     try:
