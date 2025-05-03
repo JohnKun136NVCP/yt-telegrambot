@@ -5,9 +5,7 @@ import os.path
 import ssl
 import re
 import requests
-from datetime import datetime,timedelta
-from mutagen.mp4 import MP4, MP4Cover
-from mutagen.id3 import ID3, TIT2, TPE1, error
+import subprocess
 from pytubefix import YouTube
 from pytubefix.cli import on_progress
 from metaSong import songsData
@@ -56,9 +54,21 @@ class downloadSongsYb:
         self.songsData.updateThumbalImg(streams.thumbnail_url)
         file_path = downloaded_File if downloaded_File.endswith(".m4a") else f"{downloaded_File}.m4a"
         self.songsData.updateMetaData(file_path)
+    def __convertToFlac(self, audio_path):
+        """
+        Convert the audio file to FLAC format using ffmpeg.
+        """
+        try:
+            flac_data = audio_path.replace(".m4a", ".flac")
+            if sys.platform == "linux" or sys.platform == "linux2" or sys.platform == "win32" or sys.platform == "darwin":
+                subprocess.run(["ffmpeg","-i",audio_path,"-f","flac","{}.flac".format(self.songsData.title)],stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.songsData.updateFlacCover(flac_data)
+                os.remove(audio_path)
+        except Exception as e:
+            print(f"Error converting to FLAC: {e}")
+            print("Check if ffmpeg is installed and in your PATH.")
     def download_thumbnail(self,url_thumbnail):
         try:
-            ssl._create_default_https_context = ssl._create_unverified_context
             if url_thumbnail is not None:
                 temp_dir = os.path.join(os.getcwd(), "temp")
                 os.makedirs(temp_dir, exist_ok=True)
@@ -89,7 +99,7 @@ class downloadSongsYb:
             if not os.path.exists(self.path):
                 os.makedirs(self.path)  # Create the directory if it doesn't exist
             for filename in os.listdir(current_path):
-                if filename.endswith('.m4a'):
+                if filename.endswith('.flac'):
                     source_file = os.path.join(current_path, filename)  # Define the source file path
                     dest_file = os.path.join(new_dir_path, filename)  # Define the destination file path
                     shutil.move(source_file, dest_file)  # Move the file to the new directory
@@ -99,4 +109,5 @@ class downloadSongsYb:
         ys = yt.streams.get_audio_only()
         downloaded_File = ys.download()
         self.__addMetaData(downloaded_File)
+        self.__convertToFlac(downloaded_File)
         self.movedFile()
