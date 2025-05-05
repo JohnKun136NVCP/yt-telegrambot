@@ -18,6 +18,7 @@ Methods:
 
 import requests
 import ssl
+import time
 ssl._create_default_https_context = ssl._create_unverified_context
 class messagesAndQuotes:
     def __init__(self):
@@ -39,15 +40,15 @@ class messagesAndQuotes:
 
     def get_quote(self):
         try:
-            response = requests.get(self.url,timeout=5)
+            time.sleep(2)  # Wait 2 seconds between requests
+            response = requests.get(self.url, timeout=5)
             response.raise_for_status()
             data = response.json()
             self.quote = data[0]
             self.messageQuote = self.quote['q']
             self.authorQuote = self.quote['a']
             self.quouteString = f"{self.messageQuote} - {self.authorQuote}"
-            if self.quote:
-                return self.quouteString
+            return self.quouteString
         except requests.exceptions.RequestException as e:
             print(f"Error fetching quote: {e}")
-        
+            return None
