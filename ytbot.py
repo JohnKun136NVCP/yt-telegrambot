@@ -74,11 +74,11 @@ async def messageToUser(context: ContextTypes.DEFAULT_TYPE):
             if info.showMessageUser() != "":
                 for idUser in idUsers:
                         await context.bot.send_message(chat_id=idUser, text=f'{info.showMessageUser()}',parse_mode="MarkdownV2")
-            elif info.get_quote()== "" and idUsers:
+            elif info.showMessageUser()== "" and idUsers:
                 info.get_quote()
                 for idUser in idUsers:
                     await context.bot.send_message(chat_id=idUser, text=f'Quote of the Week:\n{info.quouteString}')
-    except sqlite3.Error as e:pass
+    except sqlite3.Error as e:print(f"Error: {e}")
 async def start(update: Update, context: CallbackContext) -> None:
     user = update.message.from_user
     await getUser(user['id'],user['username'])
@@ -95,6 +95,7 @@ async def changeCommands(application: Application) -> None:
     await application.bot.set_chat_menu_button()
 
 async def download(update: Update, context: CallbackContext) -> None:
+    sopported_formats = [".m4a", ".mp3", ".flac"]
     user = update.message.from_user
     await getUser(user['id'],user['username'])
     url = update.message.text
@@ -127,11 +128,11 @@ async def download(update: Update, context: CallbackContext) -> None:
             new_dir_path = os.path.join(current_path, "Songs/")
 
             for root, dirs, files in os.walk(new_dir_path):
-                for file in files:
-                    if file.endswith(".m4a"):
-                        similarity_ratio = sm(None, file, titleName+".m4a").ratio()
-                        if similarity_ratio > 0.9:  # Match threshold
-                            match_files.append(os.path.join(root, file))
+                for file in os.listdir(root):
+                    for ext in sopported_formats:
+                        if file.endswith(ext):
+                            similarity_ratio = sm(None, file, titleName + ext).ratio()
+                            if similarity_ratio > 0.9:match_files.append(os.path.join(root, file))
             # Send matches to the user
             if match_files:
                 for audio_path in match_files:
@@ -164,7 +165,7 @@ def main(TELEGRAM_TOKEN):
         job_queue.run_repeating(
             messageToUser,
             interval=604800,
-            first=4
+            first=10
         )
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download))
         application.run_polling()
