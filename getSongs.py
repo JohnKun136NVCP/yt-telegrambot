@@ -67,6 +67,61 @@ class downloadSongsYb:
         except Exception as e:
             print(f"Error converting to FLAC: {e}")
             print("Check if ffmpeg is installed and in your PATH.")
+
+    def __reduce_audio_quality(input_file, output_file, bitrate="128k", sample_rate="44100"):
+        """ Reduce the quality of an MP3 or M4A file using ffmpeg. """
+        try:
+            command = [
+                "ffmpeg", "-i", input_file,
+                "-b:a", bitrate, "-ar", sample_rate,
+                "-c:a", "aac" if input_file.endswith(".m4a") else "libmp3lame",
+                "-y", output_file  # Overwrite existing file
+            ]
+            subprocess.run(command, check=True)
+            print(f"Compressed file saved as: {output_file}")
+        except subprocess.CalledProcessError as e:
+            print(f"Error processing {input_file}: {e}")
+
+
+    def __sizeOfFile(self,file_path):
+        """
+        Get the size of the file in bytes.
+        """
+        try:
+            if os.path.exists(file_path):
+                #Default file .m4a
+                mb_m4a_size = os.path.getsize(file_path) / (1024 * 1024)
+                if mb_m4a_size < 50:
+                    mp3_path = file_path.replace(".m4a",".mp3")
+                    subprocess.run(["ffmpeg","-i",file_path,"-ar","44100","{}.mp3".format(self.songsData.title)],stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    mb_mp3_size = os.path.getsize(mp3_path) / (1024 * 1024)
+                    os.remove(file_path)
+                    if  mb_mp3_size < 50:
+                        # Convert to flac
+                        self.__convertToFlac(mp3_path)
+                        flac_data = mp3_path.replace(".mp3", ".flac")
+                        flac_mb_size = os.path.getsize(flac_data) / (1024 * 1024)
+                        if flac_mb_size < 50:
+                            os.remove(mp3_path)
+                elif mb_m4a_size > 50:
+                    # Convert to mp3
+                    mp3_path = file_path.replace(".m4a",".mp3")
+                    subprocess.run(["ffmpeg","-i",file_path,"-ar","22050","{}.mp3".format(self.songsData.title)],stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    mb_mp3_size = os.path.getsize(mp3_path) / (1024 * 1024)
+                    os.remove(file_path)
+                else:
+                    # Convert to mp3
+                    mp3_path = file_path.replace(".m4a",".mp3")
+                    self.reduce_audio_quality(file_path, mp3_path, bitrate="96k", sample_rate="32000")
+                    mb_mp3_size = os.path.getsize(mp3_path) / (1024 * 1024)
+                    if mb_mp3_size> 50:
+                        print("File size is greater than 50MB")
+                        print("Error: File size is greater than 50MB")
+                    else:
+                        os.remove(file_path)
+        except Exception as e:
+            print(f"Error getting file size: {e}")
+
     def download_thumbnail(self,url_thumbnail):
         try:
             if url_thumbnail is not None:
@@ -98,16 +153,19 @@ class downloadSongsYb:
             new_dir_path = os.path.join(current_path, self.path)  # Create a new directory path
             if not os.path.exists(self.path):
                 os.makedirs(self.path)  # Create the directory if it doesn't exist
+            # List of supported file extensions
+            supported_formats = [".m4a", ".mp3", ".flac"]
             for filename in os.listdir(current_path):
-                if filename.endswith('.m4a'):
-                    source_file = os.path.join(current_path, filename)  # Define the source file path
-                    dest_file = os.path.join(new_dir_path, filename)  # Define the destination file path
-                    shutil.move(source_file, dest_file)  # Move the file to the new directory
-        except Exception as e:pass
+                if any(filename.endswith(ext) for ext in supported_formats): 
+                    source_file = os.path.join(current_path, filename)
+                    dest_file = os.path.join(new_dir_path, filename)
+                    shutil.move(source_file, dest_file)
+        except Exception as e:pass  
     def download(self):
         yt =  YouTube(self.completeUrl,on_progress_callback=on_progress)
         ys = yt.streams.get_audio_only()
         downloaded_File = ys.download()
         self.__addMetaData(downloaded_File)
-        #self.__convertToFlac(downloaded_File)
+        self.__sizeOfFile(downloaded_File)
         self.movedFile()
+
