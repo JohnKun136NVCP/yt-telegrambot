@@ -49,6 +49,14 @@ class dataBase:
     def __init__(self):
         self.connect = sqlite3.connect("idSongs.db")
         self.cursor = self.connect.cursor()
+        self.connect_usrs = sqlite3.connect("users.db")
+        self.cursor_usrs = self.connect_usrs.cursor()
+        self.db_create_query_usrs = '''CREATE TABLE IF NOT EXISTS users (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                telegram_id INTEGER UNIQUE,
+                                username TEXT);'''
+    
+        self.cursor_usrs.execute(self.db_create_query_usrs)
         self.db_create_query = '''CREATE TABLE IF NOT EXISTS songs (
             id INTEGER PRIMARY KEY,
             name TEXT,
@@ -70,12 +78,22 @@ class dataBase:
         return re.sub(r'[<>:"/\\|?*]', '_', filename)
     
     def showDatabase(self):
-        self.cursor.execute('SELECT * FROM songs')
-        result = self.cursor.fetchall()
-        for row in result:
-            print(row)
+        db_select = int(input("Select the database to show: 1. songs\n 2. Users IDs\n"))
+        if db_select == 1:
+            self.cursor.execute('SELECT * FROM songs')
+            result = self.cursor.fetchall()
+            for row in result:
+                print(row)
+        elif db_select == 2:
+            self.cursor_usrs.execute("SELECT * FROM users")
+            result = self.cursor_usrs.fetchall()
+            for row in result:
+                print(row)
+        else:
+            print("Invalid selection")
     
     def deleteById(self, song_id):
+        print("Only for Songs database")
         self.cursor.execute('SELECT * FROM songs WHERE id = ?', (song_id,))
         results = self.cursor.fetchone()
         if results:
@@ -141,62 +159,60 @@ class dataBase:
         fetch_query = "SELECT name, thumbnail_url FROM songs"
         self.cursor.execute(fetch_query)
         return self.cursor.fetchall()
-    def updateThumbnails(self,directory="/Songs"):
+
+    def updateThumbnails(self, directory="/Songs"):
         songs_db = self.fetch_songs()
         try:
             current_path = os.getcwd()
             new_dir_path = os.path.join(current_path, "Songs/")
+
+            # List of supported formats
+            supported_formats = [".flac", ".mp3", ".m4a"]
+
             for title, url in songs_db:
                 for root, dirs, files in os.walk(new_dir_path):
                     for file in files:
-                        if file.endswith(".flac") and title in file:
-                                coverImage = tagsong(url)
-                                coverImage.run()
-                                song_path = os.path.join(os.getcwd(), f"Songs/{file}")
-                                target = File(song_path)
-                                path_img = os.path.join(os.getcwd(), "Songs/cropped_image.png")
-                                img = Picture()
-                                img.type = 3
-                                with open(path_img, 'rb') as albumart:
-                                        img.data = albumart.read()
-                                target.add_picture(img)
-                                target.save()
-                                coverImage.deleteTemp()
-                        elif sm(None,str(file),str(title)).ratio()>0.9 or sm(None,str(file),str(title)).ratio()>0.75:
+                        if any(file.endswith(ext) for ext in supported_formats) and title in file:
+                            coverImage = tagsong(url)
+                            coverImage.run()
+
+                            song_path = os.path.join(os.getcwd(), f"Songs/{file}")
+                            target = File(song_path)
+                            path_img = os.path.join(os.getcwd(), "Songs/cropped_image.png")
+
+                            img = Picture()
+                            img.type = 3
+                            with open(path_img, 'rb') as albumart:
+                                img.data = albumart.read()
+
+                            target.add_picture(img)
+                            target.save()
+                            coverImage.deleteTemp()
+
+                        elif sm(None, str(file), str(title)).ratio() > 0.9 or sm(None, str(file), str(title)).ratio() > 0.75:
                             temp_title = file
-                            if file.endswith(".flac") and temp_title in file:
+                            if any(temp_title.endswith(ext) for ext in supported_formats):
                                 coverImage = tagsong(url)
                                 coverImage.run()
+
                                 song_path = os.path.join(os.getcwd(), f"Songs/{file}")
                                 target = File(song_path)
                                 path_img = os.path.join(os.getcwd(), "Songs/cropped_image.png")
+
                                 img = Picture()
                                 img.type = 3
                                 with open(path_img, 'rb') as albumart:
-                                        img.data = albumart.read()
+                                    img.data = albumart.read()
+
                                 target.add_picture(img)
                                 target.save()
                                 coverImage.deleteTemp()
-                                coverImage.deleteTemp()
+
         except Exception as e:
             print(f"Failed to download cover for '{title}': {e}")
-    def m4aToFlac(self, directory="/Songs"):
-        for filename in os.listdir(directory):
-            if filename.endswith(".m4a"):
-                audio_path = os.path.join(directory, filename)
-                flac_data = audio_path.replace(".m4a", ".flac")
-                try:
-                    if sys.platform == "linux" or sys.platform == "linux2" or sys.platform == "win32" or sys.platform == "darwin":
-                        subprocess.run(["ffmpeg", "-i", audio_path, "-f", "flac", flac_data], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        self.updateThumbnails()
-                except Exception as e:
-                    print(f"Error converting {audio_path} to FLAC: {e}")
-                    print("Please check if ffmpeg is installed and available in your PATH.")
-                    continue
-                os.remove(audio_path)  # Delete original .m4a file
 def main():
     dbs = dataBase()
-    print("Show database: showdb\nReorderIDS: reorderid\nDelete song: delete\nAdd song: add\nUpdate thumbal images: upthum\nUpdate durations: updatedurations\nUpdate to Flac: flc\nQuit: q")
+    print("Show database: showdb\nReorderIDS: reorderid\nDelete song: delete\nAdd song: add\nUpdate thumbal images: upthum\nUpdate durations: updatedurations\nQuit: q")
     for line in sys.stdin:
         if 'q' == line.rstrip():
             break
@@ -235,7 +251,7 @@ def main():
         elif 'flc' == line.rstrip():
             dbs.m4aToFlac()
             print("Converted to FLAC")
-        print("Show database: showdb\nReorderIDS: reorderid\nDelete song: delete\nAdd song: add\nUpdate thumbal images: upthum\nUpdate durations: updatedurations\nUpdate to Flac: flc\nQuit: q")
+        print("Show database: showdb\nReorderIDS: reorderid\nDelete song: delete\nAdd song: add\nUpdate thumbal images: upthum\nUpdate durations: updatedurations\nQuit: q")
 
 if __name__ == "__main__":
     main()
