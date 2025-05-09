@@ -59,9 +59,16 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
+
+
+
 async def getUser(id,username):
-    userDatabase = usrdatabase(id,username)
-    userDatabase.isOnTableOrInsert()
+    try:
+        userDatabase = usrdatabase(id,username)
+        userDatabase.isOnTableOrInsert()
+        userDatabase.close()
+    except sqlite3.Error as e:
+        logger.error(f"Database error: {e}")
 async def messageToUser(context: ContextTypes.DEFAULT_TYPE):
     info = messagesAndQuotes()
     try:
@@ -78,7 +85,7 @@ async def messageToUser(context: ContextTypes.DEFAULT_TYPE):
                 info.get_quote()
                 for idUser in idUsers:
                     await context.bot.send_message(chat_id=idUser, text=f'Quote of the Week:\n{info.quouteString}')
-    except sqlite3.Error as e:print(f"Error: {e}")
+    except sqlite3.Error as e:logger.error(f"Database error: {e}")
 async def start(update: Update, context: CallbackContext) -> None:
     user = update.message.from_user
     await getUser(user['id'],user['username'])
@@ -148,12 +155,14 @@ async def download(update: Update, context: CallbackContext) -> None:
                             caption=f"Downloaded from YouTube\n @songytbbot"
                         )
                 songs.cleanTempdir(thumbal)
+                db.close()
             else:
                 await update.message.reply_text(
                     "Sorry, no matches were found for this song."
                 )
     except Exception as e:
         # Error handling
+        logger.error(f"Error: {e}")
         await update.message.reply_text(f"Sorry, an error occurred while processing the request.")
 
 def main(TELEGRAM_TOKEN):
@@ -169,4 +178,4 @@ def main(TELEGRAM_TOKEN):
         )
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download))
         application.run_polling()
-    except Exception as e:pass
+    except Exception as e:logger.error(f"Error in main: {e}")

@@ -6,6 +6,7 @@ import ssl
 import re
 import requests
 import subprocess
+import logging
 from pytubefix import YouTube
 from pytubefix.cli import on_progress
 from metaSong import songsData
@@ -13,6 +14,16 @@ from metaSong import songsData
 #SSL certificates 
 # Certificates if not installed on Operating System
 ssl._create_default_https_context = ssl._create_unverified_context
+
+# Configure logging for errors
+error_handler = logging.FileHandler("errors.log")
+error_handler.setLevel(logging.ERROR)
+error_format = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+error_handler.setFormatter(error_format)
+
+logger = logging.getLogger("getSongs")
+logger.setLevel(logging.DEBUG)  # Capture all logs, including debug
+logger.addHandler(error_handler)
 
 class downloadSongsYb:
     def __init__(self, url):
@@ -59,11 +70,10 @@ class downloadSongsYb:
         Convert the audio file to FLAC format using ffmpeg.
         """
         try:
-            flac_data = audio_path.replace(".m4a", ".flac")
+            flac_data = audio_path.replace(".mp3", ".flac")
             if sys.platform == "linux" or sys.platform == "linux2" or sys.platform == "win32" or sys.platform == "darwin":
                 subprocess.run(["ffmpeg","-i",audio_path,"-f","flac","{}.flac".format(self.songsData.title)],stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 self.songsData.updateFlacCover(flac_data)
-                os.remove(audio_path)
         except Exception as e:
             print(f"Error converting to FLAC: {e}")
             print("Check if ffmpeg is installed and in your PATH.")
@@ -95,7 +105,6 @@ class downloadSongsYb:
                     mp3_path = file_path.replace(".m4a",".mp3")
                     subprocess.run(["ffmpeg","-i",file_path,"-ar","44100","{}.mp3".format(self.songsData.title)],stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     mb_mp3_size = os.path.getsize(mp3_path) / (1024 * 1024)
-                    os.remove(file_path)
                     if  mb_mp3_size < 50:
                         # Convert to flac
                         self.__convertToFlac(mp3_path)
@@ -103,6 +112,10 @@ class downloadSongsYb:
                         flac_mb_size = os.path.getsize(flac_data) / (1024 * 1024)
                         if flac_mb_size < 50:
                             os.remove(mp3_path)
+                            os.remove(file_path)
+                        else:
+                            os.remove(file_path)
+                            os.remove(flac_data)
                 elif mb_m4a_size > 50:
                     # Convert to mp3
                     mp3_path = file_path.replace(".m4a",".mp3")
