@@ -92,13 +92,11 @@ class dataBase:
             result = self.cursor.fetchall()
             for row in result:
                 print(row)
-            self.closesong()
         elif db_select == 2:
             self.cursor_usrs.execute("SELECT * FROM users")
             result = self.cursor_usrs.fetchall()
             for row in result:
                 print(row)
-            self.closeuser()
         else:
             print("Invalid selection")
     
@@ -164,7 +162,6 @@ class dataBase:
         ''')
         self.cursor.execute('DROP TABLE songs')
         self.cursor.execute('ALTER TABLE temp_songs RENAME TO songs')
-        self.closesong()
     def fetch_songs(self):
         # Fetch title and thumbnail_url from the database
         fetch_query = "SELECT name, thumbnail_url FROM songs"
@@ -229,18 +226,14 @@ def main():
             break
         elif 'showdb' == line.rstrip():
             dbs.showDatabase()
-            dbs.closesong()
-            dbs.closeuser()
         elif 'reorderid' == line.rstrip():
             dbs.reorder_ids()
-            dbs.closesong()
             print("IDs reordered")
         elif 'delete' == line.rstrip():
             try:
                 dbs.showDatabase()
                 id_input = int(input("Enter the id of the song you want to delete: "))
                 dbs.deleteById(id_input)
-                dbs.closesong()
                 print("Song deleted")
             except:
                 print("Invalid input")
@@ -257,17 +250,12 @@ def main():
         elif 'upthum' == line.rstrip():
             try:
                 dbs.updateThumbnails()
-                dbs.closesong()
                 print("Thumbnails updated")
             except:
                 print("Invalid input")
         elif 'updatedurations' == line.rstrip():
             dbs.updateDurations()
-            dbs.closesong()
             print("Durations updated")
-        elif 'flc' == line.rstrip():
-            dbs.m4aToFlac()
-            print("Converted to FLAC")
         print("Show database: showdb\nReorderIDS: reorderid\nDelete song: delete\nAdd song: add\nUpdate thumbal images: upthum\nUpdate durations: updatedurations\nQuit: q")
 
 if __name__ == "__main__":

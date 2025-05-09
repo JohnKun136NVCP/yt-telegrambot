@@ -40,6 +40,7 @@ from databases import ytdatabase
 from databases import usrdatabase
 from datetime import time
 from telegram import Update, BotCommand, Bot
+from telegram.error import Forbidden, BadRequest
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -69,6 +70,8 @@ async def getUser(id,username):
         userDatabase.close()
     except sqlite3.Error as e:
         logger.error(f"Database error: {e}")
+
+
 async def messageToUser(context: ContextTypes.DEFAULT_TYPE):
     info = messagesAndQuotes()
     try:
@@ -80,11 +83,23 @@ async def messageToUser(context: ContextTypes.DEFAULT_TYPE):
             idUsers = [row[0] for row in result]
             if info.showMessageUser() != "":
                 for idUser in idUsers:
-                        await context.bot.send_message(chat_id=idUser, text=f'{info.showMessageUser()}',parse_mode="MarkdownV2")
+                        try:
+                            await context.bot.send_message(chat_id=idUser, text=f'{info.showMessageUser()}',parse_mode="MarkdownV2")
+                        except (BadRequest, Forbidden) as e:
+                            logger.error(f"Error sending message to user {idUser}: {e}")
+                            # Remove the user from the database if they are blocked
+                            cursor.execute('DELETE FROM users WHERE telegram_id = ?', (idUser,))
+                            connect.commit()
             elif info.showMessageUser()== "" and idUsers:
                 info.get_quote()
                 for idUser in idUsers:
-                    await context.bot.send_message(chat_id=idUser, text=f'Quote of the Week:\n{info.quouteString}')
+                    try:
+                        await context.bot.send_message(chat_id=idUser, text=f'Quote of the Week:\n{info.quouteString}')
+                    except (BadRequest, Forbidden) as e:
+                        logger.error(f"Error sending message to user {idUser}: {e}")
+                        # Remove the user from the database if they are blocked
+                        cursor.execute('DELETE FROM users WHERE telegram_id = ?', (idUser,))
+                        connect.commit()
     except sqlite3.Error as e:logger.error(f"Database error: {e}")
 async def start(update: Update, context: CallbackContext) -> None:
     user = update.message.from_user
