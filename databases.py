@@ -50,6 +50,10 @@ class usrdatabase:
         if not result:
             self.cursor.execute('''INSERT  INTO users (telegram_id,username) VALUES (?,?)''',(self.idUser,self.userName))
             self.connect.commit()
+    def close(self):
+        """Closes the database connection."""
+        self.cursor.close()
+        self.connect.close()
 
 
 class ytdatabase:
@@ -100,3 +104,7 @@ class ytdatabase:
         if result:
             self.cursor.execute('DELETE FROM songs')
             self.connect.commit()
+    def close(self):
+        """Closes the database connection."""
+        self.cursor.close()
+        self.connect.close()
