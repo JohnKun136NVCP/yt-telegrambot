@@ -132,10 +132,12 @@ class songsData(tagsong):
         image_photo = tagsong(self.thumbalImg)
         image_photo.run()
         path_img = os.path.join(os.getcwd(), "cropped_image.png")
-        img = Picture()
-        img.type = 3
         with open(path_img, 'rb') as albumart:
-                img.data = albumart.read()
+                image_data = albumart.read()
+        img = Picture()
+        img.data = image_data
+        img.type = 3
+        img.mime = "image/png"
         target.add_picture(img)
         target.save()
         image_photo.deleteTemp()
