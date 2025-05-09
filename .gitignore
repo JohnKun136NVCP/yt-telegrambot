@@ -15,3 +15,7 @@ testing.py
 *.mp3
 *.wav
 *.ogg
+#Database
+*.db
+#Log files
+*.log
