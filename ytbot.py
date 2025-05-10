@@ -31,6 +31,7 @@ Error Handling:
 - Basic error handling is implemented to prevent the bot from crashing on exceptions.
 """
 import logging
+import warnings
 import os
 import sqlite3
 from difflib import SequenceMatcher as sm
@@ -41,6 +42,7 @@ from databases import usrdatabase
 from datetime import time
 from telegram import Update, BotCommand, Bot
 from telegram.error import Forbidden, BadRequest
+from telegram.warnings import PTBDeprecationWarning
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -53,11 +55,14 @@ from telegram.ext import (
 )
 # Enable logging
 
+
+warnings.filterwarnings("error", category=PTBDeprecationWarning)
 logging.basicConfig(
     filename="botlogs.log",
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
 )
-logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('httpcore').setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
@@ -71,6 +76,18 @@ async def getUser(id,username):
     except sqlite3.Error as e:
         logger.error(f"Database error: {e}")
 
+async def updateIdUser():
+    try:
+        connect = sqlite3.connect("users.db")
+        cursor = connect.cursor()
+        cursor.execute("SELECT telegram_id FROM users ORDER BY telegram_id")
+        remaining_users = cursor.fetchall()
+        for index, row in enumerate(remaining_users, start=1):  # Start numbering from 1
+            cursor.execute("UPDATE users SET telegram_id = ? WHERE telegram_id = ?", (index, row[0]))
+        connect.commit()
+        connect.close()
+    except sqlite3.Error as e:
+        logger.error(f"Database error: {e}")
 
 async def messageToUser(context: ContextTypes.DEFAULT_TYPE):
     info = messagesAndQuotes()
@@ -90,16 +107,20 @@ async def messageToUser(context: ContextTypes.DEFAULT_TYPE):
                             # Remove the user from the database if they are blocked
                             cursor.execute('DELETE FROM users WHERE telegram_id = ?', (idUser,))
                             connect.commit()
+                            connect.close()
+                            await updateIdUser()
             elif info.showMessageUser()== "" and idUsers:
                 info.get_quote()
                 for idUser in idUsers:
                     try:
-                        await context.bot.send_message(chat_id=idUser, text=f'Quote of the Week:\n{info.quouteString}')
+                        await context.bot.send_message(chat_id=idUser, text=f'Quote of the day:\n{info.quouteString}')
                     except (BadRequest, Forbidden) as e:
                         logger.error(f"Error sending message to user {idUser}: {e}")
                         # Remove the user from the database if they are blocked
                         cursor.execute('DELETE FROM users WHERE telegram_id = ?', (idUser,))
                         connect.commit()
+                        connect.close()
+                        await updateIdUser()        
     except sqlite3.Error as e:logger.error(f"Database error: {e}")
 async def start(update: Update, context: CallbackContext) -> None:
     user = update.message.from_user
@@ -109,7 +130,7 @@ async def start(update: Update, context: CallbackContext) -> None:
 async def help_command(update: Update, context: CallbackContext) -> None:
     user = update.message.from_user
     await getUser(user['id'],user['username'])
-    await update.message.reply_text(f"How to use:\n 1. Go to the page with an interesting video (for example - https://www.youtube.com/watch?v=pIGMmlXApUE). \n2. Click the Share button. \n3. In the menu that opens, select - Telegram. \n4. When Telegram opens, click on the chat with the blue dude! Or just paste the link to the video into the chat and send it to the bot.")
+    await update.message.reply_text(f"How to use:\n 1. Go to the page with an interesting video (for example - https://www.youtube.com/watch?v=widZEAJc0QM). \n2. Click the Share button. \n3. In the menu that opens, select - Telegram. \n4. When Telegram opens, click on the chat with the blue dude! Or just paste the link to the video into the chat and send it to the bot.\n Do you have any questions? Please contact the developer @KiyotakaKatzut01.")
 
 async def changeCommands(application: Application) -> None:
     command = [BotCommand("start", "Start the bot"), BotCommand("help", "Get help")]
@@ -182,13 +203,13 @@ async def download(update: Update, context: CallbackContext) -> None:
 
 def main(TELEGRAM_TOKEN):
     try:
-        application = Application.builder().token(str(TELEGRAM_TOKEN)).post_init(changeCommands).read_timeout(7).write_timeout(29).build()
+        application = Application.builder().token(str(TELEGRAM_TOKEN)).post_init(changeCommands).read_timeout(40).write_timeout(180).connect_timeout(600).build()
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
         job_queue = application.job_queue
         job_queue.run_repeating(
             messageToUser,
-            interval=604800,
+            interval=86400,
             first=10
         )
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download))
