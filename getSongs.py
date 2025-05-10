@@ -56,7 +56,7 @@ class downloadSongsYb:
         else:
             return self.songsData.artist
     def __addMetaData(self,downloaded_File):
-        streams = YouTube(self.completeUrl,on_complete_callback=on_progress)
+        streams = YouTube(self.completeUrl,on_complete_callback=on_progress,use_po_token=True)
         title = u"{}".format(streams.title)
         artist = u"{}".format(streams.author)
         self.songsData.updateTitle(self.__cleanUpdate(title))
@@ -75,8 +75,7 @@ class downloadSongsYb:
                 subprocess.run(["ffmpeg","-i",audio_path,"-f","flac","{}.flac".format(self.songsData.title)],stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 self.songsData.updateFlacCover(flac_data)
         except Exception as e:
-            print(f"Error converting to FLAC: {e}")
-            print("Check if ffmpeg is installed and in your PATH.")
+            logger.error(f"Error converting to FLAC: {e}")
 
     def __reduce_audio_quality(input_file, output_file, bitrate="128k", sample_rate="44100"):
         """ Reduce the quality of an MP3 or M4A file using ffmpeg. """
@@ -90,7 +89,7 @@ class downloadSongsYb:
             subprocess.run(command, check=True)
             print(f"Compressed file saved as: {output_file}")
         except subprocess.CalledProcessError as e:
-            print(f"Error processing {input_file}: {e}")
+            logger.error(f"Error reducing audio quality: {e}")
 
 
     def __sizeOfFile(self,file_path):
@@ -133,7 +132,7 @@ class downloadSongsYb:
                     else:
                         os.remove(file_path)
         except Exception as e:
-            print(f"Error getting file size: {e}")
+            logger.error(f"Error getting file size: {e}")
 
     def download_thumbnail(self,url_thumbnail):
         try:
@@ -151,6 +150,7 @@ class downloadSongsYb:
                     return None
             else:return None    
         except Exception as e:
+            logger.error(f"Error downloading thumbnail: {e}")
             return None
     def cleanTempdir(self,img_path):
         if img_path:
@@ -173,12 +173,13 @@ class downloadSongsYb:
                     source_file = os.path.join(current_path, filename)
                     dest_file = os.path.join(new_dir_path, filename)
                     shutil.move(source_file, dest_file)
-        except Exception as e:pass  
+        except Exception as e:logger.error(f"Error moving file: {e}")  
     def download(self):
-        yt =  YouTube(self.completeUrl,on_progress_callback=on_progress,use_po_token=True)
-        ys = yt.streams.get_audio_only()
-        downloaded_File = ys.download()
-        self.__addMetaData(downloaded_File)
-        self.__sizeOfFile(downloaded_File)
-        self.movedFile()
-
+        try:
+            yt =  YouTube(self.completeUrl,on_progress_callback=on_progress)
+            ys = yt.streams.get_audio_only()
+            downloaded_File = ys.download()
+            self.__addMetaData(downloaded_File)
+            self.__sizeOfFile(downloaded_File)
+            self.movedFile()
+        except Exception as e:logger.error(f"Error downloading video: {e}")
