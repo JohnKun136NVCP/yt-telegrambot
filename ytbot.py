@@ -107,7 +107,6 @@ async def messageToUser(context: ContextTypes.DEFAULT_TYPE):
                             # Remove the user from the database if they are blocked
                             cursor.execute('DELETE FROM users WHERE telegram_id = ?', (idUser,))
                             connect.commit()
-                            connect.close()
                             await updateIdUser()
             elif info.showMessageUser()== "" and idUsers:
                 info.get_quote()
@@ -119,7 +118,6 @@ async def messageToUser(context: ContextTypes.DEFAULT_TYPE):
                         # Remove the user from the database if they are blocked
                         cursor.execute('DELETE FROM users WHERE telegram_id = ?', (idUser,))
                         connect.commit()
-                        connect.close()
                         await updateIdUser()        
     except sqlite3.Error as e:logger.error(f"Database error: {e}")
 async def start(update: Update, context: CallbackContext) -> None:
