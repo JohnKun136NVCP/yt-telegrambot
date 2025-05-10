@@ -175,7 +175,7 @@ class downloadSongsYb:
                     shutil.move(source_file, dest_file)
         except Exception as e:pass  
     def download(self):
-        yt =  YouTube(self.completeUrl,on_progress_callback=on_progress)
+        yt =  YouTube(self.completeUrl,on_progress_callback=on_progress,use_po_token=True)
         ys = yt.streams.get_audio_only()
         downloaded_File = ys.download()
         self.__addMetaData(downloaded_File)
