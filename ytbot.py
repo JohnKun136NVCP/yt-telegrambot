@@ -76,19 +76,6 @@ async def getUser(id,username):
     except sqlite3.Error as e:
         logger.error(f"Database error: {e}")
 
-async def updateIdUser():
-    try:
-        connect = sqlite3.connect("users.db")
-        cursor = connect.cursor()
-        cursor.execute("SELECT telegram_id FROM users ORDER BY telegram_id")
-        remaining_users = cursor.fetchall()
-        for index, row in enumerate(remaining_users, start=1):  # Start numbering from 1
-            cursor.execute("UPDATE users SET telegram_id = ? WHERE telegram_id = ?", (index, row[0]))
-        connect.commit()
-        connect.close()
-    except sqlite3.Error as e:
-        logger.error(f"Database error: {e}")
-
 async def messageToUser(context: ContextTypes.DEFAULT_TYPE):
     info = messagesAndQuotes()
     try:
@@ -107,7 +94,7 @@ async def messageToUser(context: ContextTypes.DEFAULT_TYPE):
                             # Remove the user from the database if they are blocked
                             cursor.execute('DELETE FROM users WHERE telegram_id = ?', (idUser,))
                             connect.commit()
-                            await updateIdUser()
+                            
             elif info.showMessageUser()== "" and idUsers:
                 info.get_quote()
                 for idUser in idUsers:
@@ -117,8 +104,7 @@ async def messageToUser(context: ContextTypes.DEFAULT_TYPE):
                         logger.error(f"Error sending message to user {idUser}: {e}")
                         # Remove the user from the database if they are blocked
                         cursor.execute('DELETE FROM users WHERE telegram_id = ?', (idUser,))
-                        connect.commit()
-                        await updateIdUser()        
+                        connect.commit()      
     except sqlite3.Error as e:logger.error(f"Database error: {e}")
 async def start(update: Update, context: CallbackContext) -> None:
     user = update.message.from_user
