@@ -142,26 +142,46 @@ class dataBase:
                     self.cursor.execute("UPDATE songs SET duration = ? WHERE name = ?", (duration, song_title))
         self.connect.commit()
     def reorder_ids(self):
-        # Eliminar la tabla temporal si ya existe
-        self.cursor.execute('DROP TABLE IF EXISTS temp_songs')
-        # Create a new temporary table with AUTOINCREMENT for id
-        self.cursor.execute('''
-            CREATE TABLE temp_songs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT,
-                channel TEXT,
-                uri TEXT,
-                duration INTEGER,
-                thumbnail_url TEXT
-            );
-        ''')
-        self.cursor.execute('''
-            INSERT INTO temp_songs (name, channel, uri, duration, thumbnail_url)
-            SELECT name, channel, uri, duration, thumbnail_url
-            FROM songs;
-        ''')
-        self.cursor.execute('DROP TABLE songs')
-        self.cursor.execute('ALTER TABLE temp_songs RENAME TO songs')
+        option = input("Choose the database to reorder IDs: 1. songs\n2. Users IDs\n")
+        if option == "1":
+            # Eliminar la tabla temporal si ya existe
+            self.cursor.execute('DROP TABLE IF EXISTS temp_songs')
+            # Create a new temporary table with AUTOINCREMENT for id
+            self.cursor.execute('''
+                CREATE TABLE temp_songs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT,
+                    channel TEXT,
+                    uri TEXT,
+                    duration INTEGER,
+                    thumbnail_url TEXT
+                );
+            ''')
+            self.cursor.execute('''
+                INSERT INTO temp_songs (name, channel, uri, duration, thumbnail_url)
+                SELECT name, channel, uri, duration, thumbnail_url
+                FROM songs;
+            ''')
+            self.cursor.execute('DROP TABLE songs')
+            self.cursor.execute('ALTER TABLE temp_songs RENAME TO songs')
+        else:
+            # Eliminar la tabla temporal si ya existe
+            self.cursor_usrs.execute('DROP TABLE IF EXISTS temp_users')
+            # Create a new temporary table with AUTOINCREMENT for id
+            self.cursor_usrs.execute('''
+                CREATE TABLE temp_users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_id INTEGER UNIQUE,
+                    username TEXT
+                );
+            ''')
+            self.cursor_usrs.execute('''
+                INSERT INTO temp_users (telegram_id, username)
+                SELECT telegram_id, username
+                FROM users;
+            ''')
+            self.cursor_usrs.execute('DROP TABLE users')
+            self.cursor_usrs.execute('ALTER TABLE temp_users RENAME TO users')
     def fetch_songs(self):
         # Fetch title and thumbnail_url from the database
         fetch_query = "SELECT name, thumbnail_url FROM songs"
