@@ -63,13 +63,13 @@ class usrdatabase:
                     username TEXT
                 );
             ''')
-        self.cursor_usrs.execute('''
+        self.cursor.execute('''
                 INSERT INTO temp_users (telegram_id, username)
                 SELECT telegram_id, username
                 FROM users;
             ''')
-        self.cursor_usrs.execute('DROP TABLE users')
-        self.cursor_usrs.execute('ALTER TABLE temp_users RENAME TO users')
+        self.cursor.execute('DROP TABLE users')
+        self.cursor.execute('ALTER TABLE temp_users RENAME TO users')
        
     def close(self):
         """Closes the database connection."""
