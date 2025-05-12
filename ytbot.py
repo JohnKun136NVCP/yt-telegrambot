@@ -73,6 +73,7 @@ async def getUser(id,username):
     try:
         userDatabase = usrdatabase(id,username)
         userDatabase.isOnTableOrInsert()
+        userDatabase.reorderIdUserTable()
         userDatabase.close()
     except sqlite3.Error as e:
         logger.error(f"Database error: {e}")

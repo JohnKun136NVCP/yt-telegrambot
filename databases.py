@@ -50,6 +50,27 @@ class usrdatabase:
         if not result:
             self.cursor.execute('''INSERT  INTO users (telegram_id,username) VALUES (?,?)''',(self.idUser,self.userName))
             self.connect.commit()
+    def reorderIdUserTable(self):
+        """
+        This method reorder the id of the table
+        """
+        # Delete temporary table
+        self.cursor.execute('DROP TABLE IF EXISTS temp_users')
+        self.cursor.execute('''
+                CREATE TABLE temp_users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_id INTEGER UNIQUE,
+                    username TEXT
+                );
+            ''')
+        self.cursor_usrs.execute('''
+                INSERT INTO temp_users (telegram_id, username)
+                SELECT telegram_id, username
+                FROM users;
+            ''')
+        self.cursor_usrs.execute('DROP TABLE users')
+        self.cursor_usrs.execute('ALTER TABLE temp_users RENAME TO users')
+       
     def close(self):
         """Closes the database connection."""
         self.cursor.close()
