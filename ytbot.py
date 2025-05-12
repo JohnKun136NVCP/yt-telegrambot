@@ -30,6 +30,7 @@ Job Queue:
 Error Handling:
 - Basic error handling is implemented to prevent the bot from crashing on exceptions.
 """
+import httpx
 import logging
 import warnings
 import os
@@ -191,11 +192,14 @@ def main(TELEGRAM_TOKEN):
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
         job_queue = application.job_queue
-        job_queue.run_repeating(
+        job_queue.run_daily(
             messageToUser,
-            interval=86400,
+            time(hour=12, minute=0),
+            days=(0, 1, 2, 3, 4, 5, 6),
             first=10
         )
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download))
         application.run_polling()
+    except httpx.RequestError as e:
+        logger.error(f"Request error: {e}")
     except Exception as e:logger.error(f"Error in main: {e}")
