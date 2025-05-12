@@ -195,8 +195,7 @@ def main(TELEGRAM_TOKEN):
         job_queue.run_daily(
             messageToUser,
             time(hour=12, minute=0),
-            days=(0, 1, 2, 3, 4, 5, 6),
-            first=10
+            days=(0, 1, 2, 3, 4, 5, 6)
         )
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download))
         application.run_polling()
