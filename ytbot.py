@@ -62,12 +62,10 @@ logging.getLogger('httpx').setLevel(logging.INFO)
 logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('httpx').setLevel(logging.ERROR)
 logging.getLogger('httpx').setLevel(logging.CRITICAL)
-logging.getLogger('httpx').setLevel(logging.DEBUG)
 logging.getLogger('httpcore').setLevel(logging.INFO)
 logging.getLogger('httpcore').setLevel(logging.WARNING)
 logging.getLogger('httpcore').setLevel(logging.ERROR)
 logging.getLogger('httpcore').setLevel(logging.CRITICAL)
-logging.getLogger('httpcore').setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
