@@ -1,36 +1,34 @@
 """
-This script implements a Telegram bot that allows users to download audio files from YouTube videos. 
-It includes functionalities for user management, message broadcasting, and audio file handling.
-Modules:
-- logging: For logging bot activities.
-- os: For file and directory operations.
-- sqlite3: For database interactions.
-- difflib: For comparing file names to find matches.
-- datetime: For time-related operations.
-- telegram: For interacting with the Telegram Bot API.
-- telegram.ext: For handling bot commands and messages.
-Functions:
-- getUser(id, username): Ensures the user is in the database or inserts them if not.
-- messageToUser(context): Sends a weekly message or quote to all users in the database.
-- start(update, context): Handles the /start command, welcoming the user and explaining the bot's functionality.
-- help_command(update, context): Handles the /help command, providing instructions on how to use the bot.
-- changeCommands(application): Sets the bot's commands and chat menu button.
-- download(update, context): Handles YouTube video links sent by users, downloads the audio, and sends it back to the user.
-- main(TELEGRAM_TOKEN): Initializes and runs the bot, setting up handlers and scheduling weekly messages.
-Classes and External Dependencies:
-- messagesAndQuotes: Handles messages and quotes for users.
-- downloadSongsYb: Manages YouTube audio downloading.
-- ytdatabase: Handles YouTube-related database operations.
-- usrdatabase: Manages user-related database operations.
-Logging:
-- Logs bot activities to a file named "botlogs.log".
-- Suppresses warnings from the "httpx" library.
-Job Queue:
-- Schedules a weekly task to send messages or quotes to users.
-Error Handling:
-- Basic error handling is implemented to prevent the bot from crashing on exceptions.
+ytbot.py
+A Telegram bot for downloading songs from YouTube and sending them to users as audio files. 
+The bot manages user registration, handles YouTube link submissions, downloads and stores songs, 
+and periodically sends messages or quotes to registered users.
+Modules and Features:
+- User management and registration in a SQLite database.
+- Downloading and caching of YouTube audio files in various formats.
+- Sending audio files to users with metadata and thumbnails.
+- Periodic messaging to all users (e.g., quotes or announcements).
+- Command handlers for /start and /help.
+- Logging of bot activity and error handling.
+- Integration with external modules for song downloading, message management, and database operations.
+Dependencies:
+- httpx, httpcore: For HTTP requests and error handling.
+- logging, warnings: For logging and warning management.
+- os, sqlite3: For file and database operations.
+- difflib: For file name similarity matching.
+- telegram, telegram.ext: For Telegram bot API integration.
+- getSongs, messages, databases: Custom modules for song downloading, message management, and database operations.
+Main Functions:
+- getUser: Registers or updates a user in the database.
+- messageToUser: Sends messages or quotes to all registered users.
+- start: Handles the /start command and greets the user.
+- help_command: Handles the /help command and provides usage instructions.
+- changeCommands: Sets bot commands and menu buttons.
+- download: Handles YouTube link submissions, downloads audio, and sends it to the user.
+- main: Initializes and runs the Telegram bot application.
 """
 import httpx
+import httpcore
 import logging
 import warnings
 import os
@@ -55,15 +53,21 @@ from telegram.ext import (
     CallbackQueryHandler,
 )
 # Enable logging
-
-
 warnings.filterwarnings("error", category=PTBDeprecationWarning)
 logging.basicConfig(
     filename="botlogs.log",
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
 )
+logging.getLogger('httpx').setLevel(logging.INFO)
 logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('httpx').setLevel(logging.ERROR)
+logging.getLogger('httpx').setLevel(logging.CRITICAL)
+logging.getLogger('httpx').setLevel(logging.DEBUG)
+logging.getLogger('httpcore').setLevel(logging.INFO)
 logging.getLogger('httpcore').setLevel(logging.WARNING)
+logging.getLogger('httpcore').setLevel(logging.ERROR)
+logging.getLogger('httpcore').setLevel(logging.CRITICAL)
+logging.getLogger('httpcore').setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
@@ -195,11 +199,19 @@ def main(TELEGRAM_TOKEN):
         job_queue = application.job_queue
         job_queue.run_daily(
             messageToUser,
-            time(hour=12, minute=0),
+            time(hour=15, minute=30, second=0),
             days=(0, 1, 2, 3, 4, 5, 6)
         )
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download))
         application.run_polling()
-    except httpx.RequestError as e:
-        logger.error(f"Request error: {e}")
-    except Exception as e:logger.error(f"Error in main: {e}")
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error: {e}")
+    except (httpx.RequestError, httpx.TransportError, httpx.TimeoutException, 
+            httpx.ConnectError, httpx.ReadError, httpx.WriteTimeout, 
+            httpx.PoolTimeout, httpx.NetworkError, httpx.ConnectTimeout,
+            httpcore.ProtocolError, httpcore.ProxyError, httpcore.ConnectTimeout, 
+            httpcore.ReadTimeout, httpcore.WriteTimeout, httpcore.CloseError, 
+            httpcore.SocketError) as e:
+        logger.error(f"HTTPX/HTTPCORE-related error: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error in main: {e}")
