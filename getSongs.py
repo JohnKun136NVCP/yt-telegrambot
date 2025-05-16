@@ -100,22 +100,22 @@ class downloadSongsYb:
             if os.path.exists(file_path):
                 #Default file .m4a
                 mb_m4a_size = os.path.getsize(file_path) / (1024 * 1024)
-                if mb_m4a_size < 50:
+                if mb_m4a_size < 49.9:
                     mp3_path = file_path.replace(".m4a",".mp3")
                     subprocess.run(["ffmpeg","-i",file_path,"-ar","44100","{}.mp3".format(self.songsData.title)],stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     mb_mp3_size = os.path.getsize(mp3_path) / (1024 * 1024)
-                    if  mb_mp3_size < 50:
+                    if  mb_mp3_size < 49.9:
                         # Convert to flac
                         self.__convertToFlac(mp3_path)
                         flac_data = mp3_path.replace(".mp3", ".flac")
                         flac_mb_size = os.path.getsize(flac_data) / (1024 * 1024)
-                        if flac_mb_size < 50:
+                        if flac_mb_size < 49.9:
                             os.remove(mp3_path)
                             os.remove(file_path)
                         else:
                             os.remove(file_path)
                             os.remove(flac_data)
-                elif mb_m4a_size > 50:
+                elif mb_m4a_size > 49.9:
                     # Convert to mp3
                     mp3_path = file_path.replace(".m4a",".mp3")
                     subprocess.run(["ffmpeg","-i",file_path,"-ar","22050","{}.mp3".format(self.songsData.title)],stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
