@@ -61,12 +61,22 @@ from mutagen.id3 import ID3, TIT2, TPE1, error, APIC
 class tagsong:
     def __init__(self, thumbalUlr):
         self.thumbalUlr = thumbalUlr
-        self.__setStringDefault = "sddefault.jpg"
+        self.__defaultThumbal = "sddefault.jpg"
+        self.__maxdefault = "maxresdefault.jpg"
+        self.__hqdefault = "hqdefault.jpg"
         self.height = int
         self.width = int
-        self.__cropSize = 350
-    def replaceString(self):
-        return self.thumbalUlr.replace(self.__setStringDefault, self.__setStringDefault)
+        self.__cropSize = int #350 sddefault; 720 maxresdefault; 480 hqdefault;
+    def __setSizeDefault(self):
+        if self.thumbalUlr.endswith(self.__defaultThumbal):
+            self.__cropSize = 350
+        elif self.thumbalUlr.endswith(self.__maxdefault):
+            self.__cropSize = 720
+        elif self.thumbalUlr.endswith(self.__hqdefault):
+            self.__cropSize = 480
+        else:
+            self.__cropSize = 750
+        return self.__cropSize
     def downloadImage(self):
         response = requests.get(self.thumbalUlr)
         image_np = np.asarray(bytearray(response.content), dtype=np.uint8)
@@ -74,8 +84,10 @@ class tagsong:
     def getDimension(self):
         return self.image.shape
     def calculateCoordinates(self):
+        self.__setSizeDefault()
         return (self.width - self.__cropSize) // 2, (self.height - self.__cropSize) // 2
     def cropImage(self):
+        self.__setSizeDefault()
         x_start, y_start = self.calculateCoordinates()
         return self.image[y_start:y_start + self.__cropSize, x_start:x_start + self.__cropSize]
     def saveImage(self):
@@ -84,7 +96,7 @@ class tagsong:
         temp_dir = os.path.join(os.getcwd(), "cropped_image.png")
         os.remove(temp_dir)
     def run(self):
-        self.thumbalUlr = self.replaceString()
+        #self.thumbalUlr = self.replaceString()
         self.image = self.downloadImage()
         self.height, self.width, _ = self.getDimension()
         self.cropped_image = self.cropImage()
