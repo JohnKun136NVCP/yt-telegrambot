@@ -197,7 +197,7 @@ def main(TELEGRAM_TOKEN):
         job_queue = application.job_queue
         job_queue.run_daily(
             messageToUser,
-            time(hour=15, minute=30, second=0),
+            time(hour=18, minute=00, second=0),
             days=(0, 1, 2, 3, 4, 5, 6)
         )
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download))
