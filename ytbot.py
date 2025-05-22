@@ -163,7 +163,7 @@ async def download(update: Update, context: CallbackContext) -> None:
                     for ext in sopported_formats:
                         if file.endswith(ext):
                             similarity_ratio = sm(None, file, titleName + ext).ratio()
-                            if similarity_ratio > 0.9:match_files.append(os.path.join(root, file))
+                            if similarity_ratio > 0.95:match_files.append(os.path.join(root, file))
             # Send matches to the user
             if match_files:
                 for audio_path in match_files:
