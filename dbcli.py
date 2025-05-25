@@ -141,6 +141,51 @@ class dataBase:
                     song_title = self.cleanString(song_title)
                     self.cursor.execute("UPDATE songs SET duration = ? WHERE name = ?", (duration, song_title))
         self.connect.commit()
+    def __extract_thumbnail(self, url):
+        pattern = r"^(.*?\.jpg)"
+        match = re.match(pattern, url)
+        return match.group(1) if match else url
+    def __fetch_thumbnail(self, song_id):
+        self.cursor.execute("SELECT thumbnail_url FROM songs WHERE id = ?", (song_id,))
+        result = self.cursor.fetchone()
+        if result:
+            return self.__extract_thumbnail(result[0])
+        return None
+    def __update_all_thumbnails(self):
+        self.cursor.execute("SELECT id, thumbnail_url FROM songs")
+        songs = self.cursor.fetchall()
+        if not songs:
+            print("No songs found in the database.")
+            return
+        for song_id, thumbnail_url in songs:
+            if thumbnail_url:
+                cleaned_url = self.__extract_thumbnail(thumbnail_url)
+                update_query = '''UPDATE songs SET thumbnail_url = ? WHERE id = ?'''
+                self.cursor.execute(update_query, (cleaned_url, song_id))
+        
+        self.connect.commit()
+        print(f"Updated {len(songs)} thumbnail URLs successfully!")
+    def update_thumbnail(self):
+        option = int(input("Choose all songs to update thumbnails: 1. All songs\n2. Specific song\n"))
+        if option == 1:
+            print("Updating thumbnails for all songs...")
+            self.__update_all_thumbnails()
+            print("All thumbnails updated successfully!")
+        elif option == 2:
+            self.cursor.execute('SELECT * FROM songs')
+            result = self.cursor.fetchall()
+            for row in result:
+                print(row)
+            song_id = int(input("Enter the id of the song you want to update thumbnail: "))
+            print("Updating thumbnail for song ID:", song_id)
+            thumbnail_url = self.__fetch_thumbnail(song_id)
+            if thumbnail_url:
+                update_query = '''UPDATE songs SET thumbnail_url = ? WHERE id = ?'''
+                self.cursor.execute(update_query, (thumbnail_url, song_id))
+                self.connect.commit()
+                print(f"Thumbnail URL updated to: {thumbnail_url} for song ID {song_id}")
+            else:
+                print(f"No thumbnail found for song ID {song_id}, update skipped.")
     def reorder_ids(self):
         option = input("Choose the database to reorder IDs: 1. songs\n2. Users IDs\n")
         if option == "1":
@@ -240,7 +285,7 @@ class dataBase:
             print(f"Failed to download cover for '{title}': {e}")
 def main():
     dbs = dataBase()
-    print("Show database: showdb\nReorderIDS: reorderid\nDelete song: delete\nAdd song: add\nUpdate thumbal images: upthum\nUpdate durations: updatedurations\nQuit: q")
+    print("Show database: showdb\nReorderIDS: reorderid\nDelete song: delete\nAdd song: add\nUpdate thumbal images: upthum\nUpdate durations: updatedurations\nUpdate ThumbalImg: thumbup\nQuit: q")
     for line in sys.stdin:
         if 'q' == line.rstrip():
             break
@@ -268,15 +313,19 @@ def main():
             except:
                 print("Invalid input")
         elif 'upthum' == line.rstrip():
-            try:
-                dbs.updateThumbnails()
-                print("Thumbnails updated")
-            except:
-                print("Invalid input")
+            dbs.updateThumbnails()
+            print("Thumbnails updated")
         elif 'updatedurations' == line.rstrip():
             dbs.updateDurations()
             print("Durations updated")
-        print("Show database: showdb\nReorderIDS: reorderid\nDelete song: delete\nAdd song: add\nUpdate thumbal images: upthum\nUpdate durations: updatedurations\nQuit: q")
+        elif 'thumbup' == line.rstrip():
+            try:
+                dbs.update_thumbnail()
+                print("Thumbnail updated")
+            except:
+                print("Invalid input")
+        print("Show database: showdb\nReorderIDS: reorderid\nDelete song: delete\nAdd song: add\nUpdate thumbal images: upthum\nUpdate durations: updatedurations\nUpdate ThumbalImg: thumbup\nQuit: q")
+
 
 if __name__ == "__main__":
     main()
