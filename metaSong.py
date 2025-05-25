@@ -53,6 +53,7 @@ import cv2
 import numpy as np
 import requests
 import os
+import re
 from io import BytesIO
 from mutagen.mp4 import MP4, MP4Cover
 from mutagen import File
@@ -108,14 +109,20 @@ class songsData(tagsong):
         self.title = str
         self.artist = str
         self.duration = int
+        self.__regexThumbalImage = r"^(.*?\.jpg)"
     def updateTitle(self,title):
         self.title = title
         return self.title
     def updateArtist(self,artist):
         self.artist = artist
         return self.artist
+    def __cleanThumbalImg(self,thumbalImg):
+        match = re.match(self.__regexThumbalImage, thumbalImg)
+        if match:
+            result = match.group(1)
+            return result
     def updateThumbalImg(self,thumbalImg):
-        self.thumbalImg = thumbalImg
+        self.thumbalImg = self.__cleanThumbalImg(thumbalImg)
         return self.thumbalImg
     def updateDuration(self,song_duration):
         song_duration = song_duration.info.length
