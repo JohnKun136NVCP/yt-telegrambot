@@ -1,54 +1,3 @@
-"""
-This module provides functionality for handling song metadata and thumbnail images.
-It includes two classes: `tagsong` for processing thumbnail images and `songsData`
-for managing and updating song metadata.
-
-Classes:
-    tagsong:
-        A class for downloading, cropping, and saving thumbnail images.
-
-        Methods:
-            __init__(thumbalUlr):
-                Initializes the `tagsong` object with a thumbnail URL.
-            replaceString():
-                Replaces the default string in the thumbnail URL.
-            downloadImage():
-                Downloads the image from the thumbnail URL.
-            getDimension():
-                Retrieves the dimensions of the downloaded image.
-            calculateCoordinates():
-                Calculates the coordinates for cropping the image.
-            cropImage():
-                Crops the image to a predefined size.
-            saveImage():
-                Saves the cropped image to a file.
-            deleteTemp():
-                Deletes the temporary cropped image file.
-            run():
-                Executes the full process of downloading, cropping, and saving the image.
-
-    songsData(tagsong):
-        A subclass of `tagsong` for managing song metadata, including title, artist,
-        duration, and album art.
-
-        Methods:
-            __init__():
-                Initializes the `songsData` object with default metadata attributes.
-            updateTitle(title):
-                Updates the title of the song.
-            updateArtist(artist):
-                Updates the artist of the song.
-            updateThumbalImg(thumbalImg):
-                Updates the thumbnail image URL.
-            updateDuration(song_duration):
-                Updates the duration of the song based on its audio file.
-            updateMetaData(audio_path):
-                Updates the metadata of an MP4 audio file, including title, artist,
-                and album art.
-            updateFlacCover(audio_path):
-                Updates the album art of a FLAC audio file.
-
-"""
 import cv2
 import numpy as np
 import requests
@@ -60,6 +9,40 @@ from mutagen import File
 from mutagen.flac import Picture, FLAC
 from mutagen.id3 import ID3, TIT2, TPE1, error, APIC
 class tagsong:
+    """
+    A class for handling YouTube thumbnail images, including downloading, cropping, and saving.
+    The class supports different thumbnail resolutions and can trim black borders for high-quality images.
+    Attributes:
+
+        thumbalUlr (str): URL of the thumbnail image.
+        height (int): Height of the image.
+        width (int): Width of the image.
+        cropped_image (np.ndarray): Cropped or processed image.
+        image (np.ndarray): Original downloaded image.
+
+    Methods:
+
+        __init__(thumbalUlr):
+            Initializes the tagsong object with the given thumbnail URL.
+        __setSizeDefault():
+            Determines the crop size based on the thumbnail type.
+        __trim_black_borders(img: np.ndarray, tol: int = 10) -> np.ndarray:
+            Trims black borders from the image using a tolerance value.
+        downloadImage():
+            Downloads the image from the provided URL and decodes it as a NumPy array.
+        getDimension():
+            Returns the dimensions (height, width, channels) of the image.
+        calculateCoordinates():
+            Calculates the starting coordinates for cropping the image to the desired size.
+        cropImage():
+            Crops the image to the determined size based on the thumbnail type.
+        saveImage():
+            Saves the cropped image as "cropped_image.png" in the current directory.
+        deleteTemp():
+            Deletes the temporary cropped image file from the current directory.
+        run():
+            Main method to process the image: downloads, crops or trims, saves, and returns the processed image.
+    """
     def __init__(self, thumbalUlr):
         self.thumbalUlr = thumbalUlr
         self.__defaultThumbal = "sddefault.jpg"
@@ -67,6 +50,8 @@ class tagsong:
         self.__hqdefault = "hqdefault.jpg"
         self.height = int
         self.width = int
+        self.cropped_image = None
+        self.image = None
         self.__cropSize = int #350 sddefault; 720 maxresdefault; 480 hqdefault;
     def __setSizeDefault(self):
         if self.thumbalUlr.endswith(self.__defaultThumbal):
@@ -78,6 +63,15 @@ class tagsong:
         else:
             self.__cropSize = 750
         return self.__cropSize
+    def __trim_black_borders(self, img: np.ndarray, tol: int = 10) -> np.ndarray:
+        non_black = (img > tol).any(axis=2)
+        rows = np.where(non_black.any(axis=1))[0]
+        cols = np.where(non_black.any(axis=0))[0]
+        if rows.size and cols.size:
+            y1, y2 = rows[0], rows[-1]
+            x1, x2 = cols[0], cols[-1]
+            return img[y1:y2+1, x1:x2+1]
+        return img
     def downloadImage(self):
         response = requests.get(self.thumbalUlr)
         image_np = np.asarray(bytearray(response.content), dtype=np.uint8)
@@ -97,13 +91,79 @@ class tagsong:
         temp_dir = os.path.join(os.getcwd(), "cropped_image.png")
         os.remove(temp_dir)
     def run(self):
-        #self.thumbalUlr = self.replaceString()
+        """
+        Executes the main image processing workflow.
+        Downloads an image, checks if the thumbnail URL ends with a specific suffix,
+        and processes the image accordingly. If the URL does not end with the expected
+        suffix, the image is cropped and saved after retrieving its dimensions.
+        Otherwise, black borders are trimmed from the image before saving.
+        Returns:
+            np.ndarray: The processed (cropped or trimmed) image.
+        """
         self.image = self.downloadImage()
-        self.height, self.width, _ = self.getDimension()
-        self.cropped_image = self.cropImage()
-        self.saveImage()
+        if not self.thumbalUlr.endswith(self.__hqdefault):
+            self.height, self.width, _ = self.getDimension()
+            self.cropped_image = self.cropImage()
+            self.saveImage()
+        else:
+            self.cropped_image = self.__trim_black_borders(self.image)
+            self.saveImage()
         return self.cropped_image
+
 class songsData(tagsong):
+    """
+    songsData class for managing and updating song metadata and cover images.
+    Inherits from:
+        tagsong
+    Attributes:
+        thumbalImg (str): Path or URL to the song's thumbnail image.
+        title (str): Title of the song.
+        artist (str): Artist of the song.
+        duration (int): Duration of the song in seconds.
+        __regexThumbalImage (str): Regular expression for extracting image filename.
+    Methods:
+    
+        __init__():
+            Initializes the songsData object with default values.
+        updateTitle(title):
+            Updates the song's title.
+            Args:
+                title (str): The new title of the song.
+            Returns:
+                str: The updated title.
+        updateArtist(artist):
+            Updates the song's artist.
+            Args:
+                artist (str): The new artist of the song.
+            Returns:
+                str: The updated artist.
+        __cleanThumbalImg(thumbalImg):
+            Cleans the thumbnail image filename using a regex.
+            Args:
+                thumbalImg (str): The thumbnail image filename or path.
+            Returns:
+                str: The cleaned image filename if matched, else None.
+        updateThumbalImg(thumbalImg):
+            Updates the thumbnail image after cleaning.
+            Args:
+                thumbalImg (str): The new thumbnail image filename or path.
+            Returns:
+                str: The updated thumbnail image filename.
+        updateDuration(song_duration):
+            Updates the duration of the song.
+            Args:
+                song_duration: An object with an 'info.length' attribute representing duration in seconds.
+            Returns:
+                int: The updated duration.
+        updateMetaData(audio_path):
+            Updates the metadata (title, artist, cover image) of an MP4 audio file.
+            Args:
+                audio_path (str): Path to the MP4 audio file.
+        updateFlacCover(audio_path):
+            Updates the cover image of a FLAC audio file.
+            Args:
+                audio_path (str): Path to the FLAC audio file.
+    """
     def __init__(self):
         self.thumbalImg = str
         self.title = str
