@@ -14,6 +14,36 @@ from mutagen.flac import Picture, FLAC
 from mutagen.id3 import ID3, TIT2, TPE1, error, APIC
 from difflib import SequenceMatcher as sm
 class tagsong:
+    """
+    A class for downloading, cropping, and saving a song thumbnail image.
+    Attributes:
+        thumbalUlr (str): The URL of the thumbnail image.
+        height (int): The height of the downloaded image.
+        width (int): The width of the downloaded image.
+        __setStringDefault (str): The default string to be replaced in the URL.
+        __cropSize (int): The size (in pixels) of the square crop.
+        image (np.ndarray): The downloaded image as a NumPy array.
+        cropped_image (np.ndarray): The cropped image as a NumPy array.
+    Methods:
+        replaceString():
+            Replaces the default string in the thumbnail URL.
+        downloadImage():
+            Downloads the image from the thumbnail URL and decodes it into a NumPy array.
+        getDimension():
+            Returns the dimensions (height, width, channels) of the image.
+        calculateCoordinates():
+            Calculates the starting coordinates for cropping the image to a square.
+        cropImage():
+            Crops the image to a square of size __cropSize centered in the image.
+        saveImage():
+            Saves the cropped image to the "Songs/cropped_image.png" file.
+        deleteTemp():
+            Deletes the temporary cropped image file.
+        run():
+            Executes the full pipeline: replaces the URL string, downloads the image,
+            gets dimensions, crops, saves, and returns the cropped image.
+    """
+
     def __init__(self, thumbalUlr):
         self.thumbalUlr = thumbalUlr
         self.__setStringDefault = "sddefault.jpg"
@@ -46,6 +76,54 @@ class tagsong:
         self.saveImage()
         return self.cropped_image
 class dataBase:
+    """
+    dataBase class for managing songs and users in SQLite databases.
+    This class provides methods to interact with two SQLite databases:
+    one for storing song metadata and another for storing user information.
+    It supports adding, deleting, updating, and fetching songs and users,
+    as well as managing song thumbnails and audio file metadata.
+    Attributes:
+
+        connect (sqlite3.Connection): Connection to the songs database.
+        cursor (sqlite3.Cursor): Cursor for the songs database.
+        connect_usrs (sqlite3.Connection): Connection to the users database.
+        cursor_usrs (sqlite3.Cursor): Cursor for the users database.
+        db_create_query_usrs (str): SQL query to create the users table.
+        db_create_query (str): SQL query to create the songs table.
+    Methods:
+
+        closesong():
+            Closes the songs database connection.
+        closeuser():
+            Closes the users database connection.
+        cleanString(filename):
+            Cleans a filename string by replacing invalid characters.
+        showDatabase():
+            Displays the contents of the selected database (songs or users).
+        deleteById(song_id):
+            Deletes a song by its ID from the songs database and removes its audio file.
+        addSong(name, channel, uri, thumbnail_url):
+            Adds a new song to the songs database with metadata.
+        updateDurations():
+            Updates the duration field for all songs in the database by reading audio files.
+        update_thumbnail():
+            Updates thumbnail URLs for all songs or a specific song.
+        reorder_ids():
+            Reorders the IDs in the songs or users database to be sequential.
+        fetch_songs():
+            Fetches the name and thumbnail URL of all songs from the database.
+        updateThumbnails(directory="/Songs"):
+            Updates embedded thumbnails in audio files based on database URLs.
+    Private Methods:
+    
+        __extract_thumbnail(url):
+            Extracts the thumbnail image URL from a given string.
+        __fetch_thumbnail(song_id):
+            Fetches and processes the thumbnail URL for a specific song.
+        __update_all_thumbnails():
+            Updates all thumbnail URLs in the songs database.
+    """
+
     def __init__(self):
         self.connect = sqlite3.connect("idSongs.db")
         self.cursor = self.connect.cursor()
@@ -284,6 +362,24 @@ class dataBase:
         except Exception as e:
             print(f"Failed to download cover for '{title}': {e}")
 def main():
+    """
+    Main command-line interface loop for managing the song database.
+    This function provides an interactive CLI for performing various operations on the song database,
+    including displaying the database, reordering IDs, deleting songs, adding new songs, updating
+    thumbnail images, updating song durations, and quitting the program.
+    Commands:
+
+        showdb         - Display the current database.
+        reorderid      - Reorder the IDs of the songs in the database.
+        delete         - Delete a song by its ID.
+        add            - Add a new song to the database.
+        upthum         - Update all thumbnail images in the database.
+        updatedurations- Update the durations of all songs.
+        thumbup        - Update the thumbnail image for a specific song.
+        q              - Quit the CLI.
+    The function reads commands from standard input and executes the corresponding database operations.
+    """
+
     dbs = dataBase()
     print("Show database: showdb\nReorderIDS: reorderid\nDelete song: delete\nAdd song: add\nUpdate thumbal images: upthum\nUpdate durations: updatedurations\nUpdate ThumbalImg: thumbup\nQuit: q")
     for line in sys.stdin:

@@ -26,6 +26,36 @@ logger.setLevel(logging.DEBUG)  # Capture all logs, including debug
 logger.addHandler(error_handler)
 
 class downloadSongsYb:
+    """
+    A class to handle downloading songs from YouTube, extracting metadata, converting audio formats,
+    reducing audio quality, managing file sizes, and handling thumbnails.
+    Attributes:
+        url (str): The YouTube video URL.
+        path (str): Directory where songs are stored.
+        regex (str): Regex pattern to extract YouTube video ID.
+        regexArtist (str): Regex pattern to clean artist names.
+        id_url (str): Extracted YouTube video ID.
+        httpUrl (str): Base YouTube URL.
+        completeUrl (str): Complete YouTube video URL.
+        songsData (songsData): Object to store and update song metadata.
+    Methods:
+    
+        __cleanUpdate(filename): Cleans a filename by removing invalid characters.
+        regexUrl(): Extracts and returns the YouTube video ID from the URL.
+        generateYbUrl(): Generates and returns the complete YouTube video URL.
+        __cleanNameArtist(): Cleans the artist name using a regex pattern.
+        __addMetaData(downloaded_File): Extracts and updates metadata for the downloaded file.
+        __convertToFlac(audio_path): Converts an audio file to FLAC format using ffmpeg.
+        __reduce_audio_quality(input_file, output_file, bitrate="128k", sample_rate="44100"):
+            Reduces the quality of an audio file using ffmpeg.
+        __sizeOfFile(file_path): Checks the file size and converts formats to ensure size constraints.
+        download_thumbnail(url_thumbnail): Downloads a thumbnail image from a URL.
+        cleanTempdir(img_path): Cleans up the temporary directory used for thumbnails.
+        movedFile(): Moves downloaded audio files to the specified directory.
+        download(): Downloads the audio from YouTube, processes metadata, checks file size, and moves the file.
+    Raises:
+        Exception: Logs errors encountered during file operations, downloads, conversions, or metadata extraction.
+    """
     def __init__(self, url):
         self.url = url
         self.path = "Songs/"

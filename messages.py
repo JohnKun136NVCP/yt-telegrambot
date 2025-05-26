@@ -1,26 +1,28 @@
-"""
-This module provides functionality for managing user messages and fetching random quotes
-from an external API.
-Classes:
-    messagesAndQuotes: A class to handle user messages and fetch random quotes.
-Methods:
-    __init__():
-        Initializes the messagesAndQuotes class with default attributes.
-    showMessageUser():
-        Reads and returns the content of a user message file. If the file is not found,
-        it prints an error message and returns an empty string.
-    get_quote():
-        Fetches a random quote from the ZenQuotes API, processes the response, and
-        returns the quote as a formatted string. If an error occurs during the API
-        request, it prints an error message.
-
-"""
-
 import requests
 import ssl
 import time
 ssl._create_default_https_context = ssl._create_unverified_context
 class messagesAndQuotes:
+    """
+    A class to handle user messages and fetch random quotes from the ZenQuotes API.
+    Attributes:
+        url (str): The API endpoint for fetching random quotes.
+        userMessage (str): Path to the file containing user messages.
+        messageQuote (str): The text of the fetched quote.
+        quouteString (str): The formatted quote string with author.
+        authorQuote (str): The author of the fetched quote.
+        quote (dict): The raw quote data fetched from the API.
+        
+    Methods:
+
+        showMessageUser():
+            Reads and returns the contents of the user message file.
+            Returns an empty string if the file is not found.
+        get_quote():
+            Fetches a random quote from the ZenQuotes API.
+            Returns the formatted quote string, or None if an error occurs.
+    """
+
     def __init__(self):
         self.url = "https://zenquotes.io?api=random"
         self.userMessage = "Messages/MessageUser.md"
@@ -28,7 +30,6 @@ class messagesAndQuotes:
         self.quouteString = str
         self.authorQuote = str
         self.quote = dict
-
     def showMessageUser(self):
         try:
             with open(self.userMessage,"r") as file:

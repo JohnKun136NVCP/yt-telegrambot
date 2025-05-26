@@ -1,32 +1,51 @@
 """
 ytbot.py
 A Telegram bot for downloading songs from YouTube and sending them to users as audio files. 
-The bot manages user registration, handles YouTube link submissions, downloads and stores songs, 
-and periodically sends messages or quotes to registered users.
-Modules and Features:
-- User management and registration in a SQLite database.
-- Downloading and caching of YouTube audio files in various formats.
-- Sending audio files to users with metadata and thumbnails.
-- Periodic messaging to all users (e.g., quotes or announcements).
-- Command handlers for /start and /help.
-- Logging of bot activity and error handling.
-- Integration with external modules for song downloading, message management, and database operations.
-Dependencies:
-- httpx, httpcore: For HTTP requests and error handling.
-- logging, warnings: For logging and warning management.
-- os, sqlite3: For file and database operations.
-- difflib: For file name similarity matching.
-- telegram, telegram.ext: For Telegram bot API integration.
-- getSongs, messages, databases: Custom modules for song downloading, message management, and database operations.
-Main Functions:
-- getUser: Registers or updates a user in the database.
-- messageToUser: Sends messages or quotes to all registered users.
-- start: Handles the /start command and greets the user.
-- help_command: Handles the /help command and provides usage instructions.
-- changeCommands: Sets bot commands and menu buttons.
-- download: Handles YouTube link submissions, downloads audio, and sends it to the user.
-- main: Initializes and runs the Telegram bot application.
+The bot manages user registration, handles YouTube song downloads, maintains a user database, 
+and sends daily messages or quotes to all registered users.
+
+Modules:
+
+    - httpx, httpcore: For HTTP requests and error handling.
+    - logging, warnings: For logging and warning management.
+    - os, sqlite3: For file and database operations.
+    - difflib: For filename similarity matching.
+    - getSongs: For downloading songs from YouTube.
+    - messages: For managing messages and quotes.
+    - databases: For user and YouTube song database management.
+    - datetime: For scheduling daily messages.
+    - telegram, telegram.ext: For Telegram bot API integration.
+
+Functions:
+
+    async def getUser(id, username):
+        Registers a user in the database if not already present and reorders user table IDs.
+    async def messageToUser(context):
+        Sends a daily message or quote to all registered users. Removes users who have blocked the bot.
+    async def start(update, context):
+        Handles the /start command. Registers the user and sends a welcome message.
+    async def help_command(update, context):
+        Handles the /help command. Registers the user and sends usage instructions.
+    async def changeCommands(application):
+        Sets the bot's command list and chat menu button.
+    async def download(update, context):
+        Handles incoming messages with YouTube links. Downloads the song, stores metadata, 
+        and sends the audio file to the user if found or downloaded.
+        Initializes and runs the Telegram bot application, sets up handlers, and schedules daily jobs.
+
+Logging:
+    
+    Logs errors and important events to 'botlogs.log'.
+
+Error Handling:
+
+    Handles database, HTTP, and Telegram API errors gracefully, logging them for debugging.
+
+Usage:
+
+    Import this module and call main(TELEGRAM_TOKEN) with your bot's token to start the bot.
 """
+
 import httpx
 import httpcore
 import logging
