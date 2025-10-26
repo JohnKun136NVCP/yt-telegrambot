@@ -56,10 +56,12 @@ class downloadSongsYb:
     Raises:
         Exception: Logs errors encountered during file operations, downloads, conversions, or metadata extraction.
     """
+
     def __init__(self, url):
         self.url = url
         self.path = "Songs/"
         self.regex =  r'(?:\?v=|\/)([a-zA-Z0-9_-]{11})'
+        self.regexSiToken = r'^.*youtu\.be/([^?]+).*$', r'\1'
         self.regexArtist = r'^(.*) - Topic$'
         self.id_url = None
         self.httpUrl = "http://youtube.com/watch?v="
@@ -86,7 +88,7 @@ class downloadSongsYb:
         else:
             return self.songsData.artist
     def __addMetaData(self,downloaded_File):
-        streams = YouTube(self.completeUrl,on_complete_callback=on_progress,use_po_token=True)
+        streams = YouTube(self.completeUrl,'WEB')
         title = u"{}".format(streams.title)
         artist = u"{}".format(streams.author)
         self.songsData.updateTitle(self.__cleanUpdate(title))
@@ -206,7 +208,7 @@ class downloadSongsYb:
         except Exception as e:logger.error(f"Error moving file: {e}")  
     def download(self):
         try:
-            yt =  YouTube(self.completeUrl,on_progress_callback=on_progress)
+            yt =  YouTube(self.completeUrl)
             ys = yt.streams.get_audio_only()
             downloaded_File = ys.download()
             self.__addMetaData(downloaded_File)

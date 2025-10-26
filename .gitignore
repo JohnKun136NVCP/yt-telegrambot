@@ -19,3 +19,5 @@ testing.py
 *.db
 #Log files
 *.log
+# Enviroment
+.env

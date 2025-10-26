@@ -29,6 +29,8 @@ Note:
 """
 
 import sqlite3
+from datetime import datetime, timedelta
+"""
 class usrdatabase:
     def __init__(self,id_user,username):
         self.idUser = id_user
@@ -42,18 +44,16 @@ class usrdatabase:
     
         self.cursor.execute(self.db_create_query)
     def isOnTableOrInsert(self):
-        """
-        This method verify if the element exist into the table. If it does not, then it will insert into the table
-        """
+        #This method verify if the element exist into the table. If it does not, then it will insert into the table
+
         self.cursor.execute('SELECT * FROM users WHERE telegram_id = ? AND username  = ?',(self.idUser,self.userName))
         result = self.cursor.fetchone()
         if not result:
             self.cursor.execute('''INSERT  INTO users (telegram_id,username) VALUES (?,?)''',(self.idUser,self.userName))
             self.connect.commit()
     def reorderIdUserTable(self):
-        """
-        This method reorder the id of the table
-        """
+        
+        #This method reorder the id of the table
         # Delete temporary table
         self.cursor.execute('DROP TABLE IF EXISTS temp_users')
         self.cursor.execute('''
@@ -72,10 +72,119 @@ class usrdatabase:
         self.cursor.execute('ALTER TABLE temp_users RENAME TO users')
        
     def close(self):
+        #Closes the database connection.
+        self.cursor.close()
+        self.connect.close()
+"""
+class usrdatabase:
+    def __init__(self, db_path="users.db"):
+        self.connect = sqlite3.connect(db_path)
+        self.cursor = self.connect.cursor()
+
+        # Crear tabla principal
+        self.cursor.execute('''CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER UNIQUE,
+            username TEXT,
+            songs_by_day INTEGER DEFAULT 0,
+            premium BOOLEAN DEFAULT 0,
+            type_user TEXT DEFAULT 'unsubscribed',
+            last_request_time TEXT
+        );''')
+
+        # Tabla para el registro del último reset
+        self.cursor.execute('''CREATE TABLE IF NOT EXISTS reset_log (
+            id INTEGER PRIMARY KEY,
+            last_reset TEXT
+        );''')
+
+        self.connect.commit()
+
+    def add_user(self, id_user, username, songs_by_day=0, premium=False, type_user='unsubscribed'):
+        """Add a user to the database."""
+        self.cursor.execute('SELECT * FROM users WHERE telegram_id = ?', (id_user,))
+        result = self.cursor.fetchone()
+        if not result:
+            self.cursor.execute('''
+                INSERT INTO users (telegram_id, username, songs_by_day, premium, type_user)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (id_user, username, songs_by_day, premium, type_user))
+            self.connect.commit()
+    def registerTimeRequest(self,id_user):
+        """Register the time of the last request for a user."""
+        now = datetime.now().isoformat()
+        self.cursor.execute('UPDATE users SET last_request_time = ? WHERE telegram_id = ?', (now, id_user))
+        self.connect.commit()
+
+    def can_request_song(self, id_user):
+        """Verify if the user can request a song based on their type and daily limit."""
+        self.cursor.execute('SELECT songs_by_day, premium, type_user FROM users WHERE telegram_id = ?', (id_user,))
+        result = self.cursor.fetchone()
+        if not result:
+            return False, "User not found in database."
+
+        songs_by_day, premium, type_user = result
+        if type_user.lower() == "admin":
+            return True, "Admin with premium: unlimited requests allowed."
+        if type_user.lower() == "subscribed" and premium:
+            return True, "Admin with premium: unlimited requests allowed."
+        if songs_by_day >= 3:
+            return False, "Daily song limit reached. Please wait until the next reset or upgrade to premium. Type command /subscribe for more info."
+
+        return True, "Song request allowed."
+
+    def request_song(self, id_user):
+        """Increment the song request count for the user."""
+        allowed, message = self.can_request_song(id_user)
+        if not allowed:
+            return False, message
+
+        self.cursor.execute('UPDATE users SET songs_by_day = songs_by_day + 1 WHERE telegram_id = ?', (id_user,))
+        self.connect.commit()
+        return True, "Song request successful."
+
+    def reset_daily_song_counts(self, id_user,username):
+        """Reset the daily song request count for a user if 24 hours have passed since the last reset."""
+        now = datetime.now()
+
+        # Create reset log table for individual users if it doesn't exist
+        self.cursor.execute('''CREATE TABLE IF NOT EXISTS reset_log_user (
+            telegram_id INTEGER PRIMARY KEY,
+            last_reset TEXT
+        );''')
+
+        # Verify last reset time for the user
+        self.cursor.execute('SELECT last_reset FROM reset_log_user WHERE telegram_id = ?', (id_user,))
+        result = self.cursor.fetchone()
+
+        if result:
+            last_reset = datetime.fromisoformat(result[0])
+            if now - last_reset < timedelta(hours=24):
+                return False, f"User {username} last reset was at {last_reset}. Less than 24 hours ago."
+        else:
+            # If no record exists, create one
+            self.cursor.execute(
+                'INSERT INTO reset_log_user (telegram_id, last_reset) VALUES (?, ?)',
+                (id_user, now.isoformat())
+            )
+            self.connect.commit()
+            return False, f"Reset log initialized for user {username}."
+
+        # Reset the song count
+        self.cursor.execute('UPDATE users SET songs_by_day = 0 WHERE telegram_id = ?', (id_user,))
+
+        # Update the last reset time
+        self.cursor.execute(
+            'UPDATE reset_log_user SET last_reset = ? WHERE telegram_id = ?',
+            (now.isoformat(), id_user)
+        )
+
+        self.connect.commit()
+        return True, f"User {username} daily count reset."
+    def close(self):
         """Closes the database connection."""
         self.cursor.close()
         self.connect.close()
-
 
 class ytdatabase:
     def __init__(self):

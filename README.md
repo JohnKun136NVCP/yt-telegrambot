@@ -32,6 +32,10 @@ Make sure you have the following installed:
     ```
 3. On ```main.py``` replace YOUR Token ```TELEGRAM_TOKEN``` and put quotes like this ```"absc123+.."```
 
+> [!NOTE]  
+> You will need to install NodeJS, since adding poToken is no longer available.
+> You can use a script.
+
 4. Run the script
     ```bash
     python3 main.py
