@@ -194,11 +194,14 @@ async def download(update: Update, context: CallbackContext) -> None:
         songs.regexUrl()
         db = ytdatabase()
         user_db = usrdatabase()
-        if user_db.can_request_song(user['id'])[0] is False and user_db.reset_daily_song_counts(user['id'],user['username'])[0] is False:
-            if user_db.can_request_song(user['id'])[0] is False:
-                await update.message.reply_text(user_db.request_song(user['id'])[1])
+        can_request, _ = user_db.can_request_song(user['id'])
+        reset_result, reset_msg = user_db.reset_daily_song_counts(user['id'], user['username'])
+        if not can_request and not reset_result:
+            if not can_request:
+                _, request_msg = user_db.request_song(user['id'])
+                await update.message.reply_text(request_msg)
             else:
-                await update.message.reply_text(user_db.reset_daily_song_counts(user['id'],user['username'])[1])
+                await update.message.reply_text(reset_msg)
             user_db.close()
         else:
             user_db = usrdatabase()
