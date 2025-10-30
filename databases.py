@@ -117,19 +117,22 @@ class usrdatabase:
         self.connect.commit()
 
     def can_request_song(self, id_user):
-        """Verify if the user can request a song based on their type and daily limit."""
+        """Check if the user can request a song based on their daily limit and subscription status."""
         self.cursor.execute('SELECT songs_by_day, premium, type_user FROM users WHERE telegram_id = ?', (id_user,))
         result = self.cursor.fetchone()
+
         if not result:
             return False, "User not found in database."
 
         songs_by_day, premium, type_user = result
-        if type_user.lower() == "admin":
-            return True, "Admin with premium: unlimited requests allowed."
-        if type_user.lower() == "subscribed" and premium:
-            return True, "Admin with premium: unlimited requests allowed."
+
+        # Premium o admin: ilimitado
+        if type_user.lower() in ["admin", "subscribed"] or premium:
+            return True, "Unlimited requests allowed."
+
+        # No premium: máximo 3 canciones
         if songs_by_day >= 3:
-            return False, "Daily song limit reached. Please wait until the next reset or upgrade to premium. Type command /subscribe for more info."
+            return False, "Daily song limit reached. Please wait until the next reset or upgrade to premium."
 
         return True, "Song request allowed."
 
@@ -140,8 +143,27 @@ class usrdatabase:
             return False, message
 
         self.cursor.execute('UPDATE users SET songs_by_day = songs_by_day + 1 WHERE telegram_id = ?', (id_user,))
+        self.registerTimeRequest(id_user)
         self.connect.commit()
         return True, "Song request successful."
+    def auto_reset_old_users(self):
+        """
+        Recorre todos los usuarios y reinicia songs_by_day si
+        han pasado 24 horas desde su última actividad.
+        """
+        now = datetime.now()
+        self.cursor.execute('SELECT telegram_id, username, last_request_time FROM users')
+        users = self.cursor.fetchall()
+
+        for user_id, username, last_time in users:
+            if not last_time:
+                continue  # new users without requests yet
+
+            last_request = datetime.fromisoformat(last_time)
+            if now - last_request >= timedelta(hours=24):
+                self.cursor.execute('UPDATE users SET songs_by_day = 0 WHERE telegram_id = ?', (user_id,))
+
+        self.connect.commit()
 
     def reset_daily_song_counts(self, id_user,username):
         """Reset the daily song request count for a user if 24 hours have passed since the last reset."""

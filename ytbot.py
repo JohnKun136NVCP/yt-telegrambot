@@ -101,33 +101,63 @@ async def getUser(id,username):
 async def messageToUser(context: ContextTypes.DEFAULT_TYPE):
     info = messagesAndQuotes()
     try:
-        connect = sqlite3.connect("users.db")
-        cursor = connect.cursor()
-        cursor.execute('SELECT telegram_id premium FROM users')
-        result = cursor.fetchall()
-        if result and os.path.exists(info.userMessage):
-            non_premium_users = [row[0] for row in result if not row[1]]
-            if info.showMessageUser() != "":
-                for idUser in non_premium_users:
+            conn = sqlite3.connect("users.db")
+            cursor = conn.cursor()
+
+            # Filted non-premium users
+            cursor.execute("""
+                SELECT telegram_id 
+                FROM users 
+                WHERE (premium = 0 OR premium IS NULL)
+                AND (type_user IS NULL OR LOWER(type_user) = 'unsubscribed')
+            """)
+            result = cursor.fetchall()
+
+            if not result:
+                logger.info("No hay usuarios no premium registrados.")
+                conn.close()
+                return
+
+            non_premium_users = [row[0] for row in result]
+
+            # Check if custom message file exists
+            if os.path.exists(info.userMessage):
+                # Send custom message to non-premium users
+                message_text = info.showMessageUser()
+                if message_text:
+                    for idUser in non_premium_users:
                         try:
-                            await context.bot.send_message(chat_id=idUser, text=f'{info.showMessageUser()}',parse_mode="MarkdownV2")
+                            await context.bot.send_message(
+                                chat_id=idUser,
+                                text=message_text,
+                                parse_mode="MarkdownV2"
+                            )
                         except (BadRequest, Forbidden) as e:
-                            logger.error(f"Error sending message to user {idUser}: {e}")
-                            # Remove the user from the database if they are blocked
+                            logger.error(f"Error enviando mensaje a {idUser}: {e}")
+                            # If user has blocked the bot or other error, remove from database
                             cursor.execute('DELETE FROM users WHERE telegram_id = ?', (idUser,))
-                            connect.commit()
-                            
-            elif info.showMessageUser()== "" and non_premium_users:
-                info.get_quote()
-                for idUser in non_premium_users:
-                    try:
-                        await context.bot.send_message(chat_id=idUser, text=f'Quote of the day:\n{info.quouteString}')
-                    except (BadRequest, Forbidden) as e:
-                        logger.error(f"Error sending message to user {idUser}: {e}")
-                        # Remove the user from the database if they are blocked
-                        cursor.execute('DELETE FROM users WHERE telegram_id = ?', (idUser,))
-                        connect.commit()      
-    except sqlite3.Error as e:logger.error(f"Database error: {e}")
+                            conn.commit()
+
+                # If no custom message, send the quote of the day
+                else:
+                    info.get_quote()
+                    quote_text = f"✨ Quote of the day ✨\n{info.quouteString}"
+                    for idUser in non_premium_users:
+                        try:
+                            await context.bot.send_message(chat_id=idUser, text=quote_text)
+                        except (BadRequest, Forbidden) as e:
+                            logger.error(f"Error from user {idUser}: {e}")
+                            cursor.execute('DELETE FROM users WHERE telegram_id = ?', (idUser,))
+                            conn.commit()
+
+            else:
+                logger.warning(f"The file {info.userMessage} doesn't exists.")
+
+            conn.close()
+
+    except sqlite3.Error as e:
+            logger.error(f"Database error: {e}")
+
 async def start(update: Update, context: CallbackContext) -> None:
     user = update.message.from_user
     await getUser(user['id'],user['username'])
@@ -193,72 +223,74 @@ async def download(update: Update, context: CallbackContext) -> None:
         songs = downloadSongsYb(str(url))
         songs.regexUrl()
         db = ytdatabase()
+        # Create user database instance
         user_db = usrdatabase()
-        can_request, _ = user_db.can_request_song(user['id'])
+        # To try to reset daily song counts if needed
         reset_result, reset_msg = user_db.reset_daily_song_counts(user['id'], user['username'])
-        if not can_request and not reset_result:
-            if not can_request:
-                _, request_msg = user_db.request_song(user['id'])
-                await update.message.reply_text(request_msg)
-            else:
-                await update.message.reply_text(reset_msg)
+        if reset_result:
+            await update.message.reply_text(f"🔄 {reset_msg}")
+        if not reset_result:
+            logger.info(f"No reset needed for user {user['username']}: {reset_msg}")
+        can_request, msg_request = user_db.can_request_song(user['id'])
+        if not can_request:
+            await update.message.reply_text(f"🚫 {msg_request}")
             user_db.close()
-        else:
-            user_db = usrdatabase()
-            user_db.registerTimeRequest(user['id'])
-            user_db.close()
-            songs.generateYbUrl()
-            # Check if the song exists in the database
-            if not db.isOntheDatabase(songs.id_url):
-                songs.download()
-                db.insertData(
-                    songs.songsData.title,
-                    songs.songsData.artist,
-                    songs.id_url,
-                    songs.songsData.duration,
-                    songs.songsData.thumbalImg
+            return
+        user_db.registerTimeRequest(user['id'])
+        user_db.close()
+        
+        songs.generateYbUrl()
+        # Check if the song exists in the database
+        if not db.isOntheDatabase(songs.id_url):
+            songs.download()
+            db.insertData(
+                songs.songsData.title,
+                songs.songsData.artist,
+                songs.id_url,
+                songs.songsData.duration,
+                songs.songsData.thumbalImg
+            )
+            isOnDB, result = db.verifyURL(songs.id_url)
+            if isOnDB:
+                titleName, artistName, duration, thumbal = (
+                    result[1],
+                    result[2],
+                    result[4],
+                    result[5],
                 )
-                isOnDB, result = db.verifyURL(songs.id_url)
-                if isOnDB:
-                    titleName, artistName, duration, thumbal = (
-                        result[1],
-                        result[2],
-                        result[4],
-                        result[5],
-                    )
-                    # Search for matching files in the "Songs/" directory
-                    match_files = []
-                    current_path = os.getcwd()
-                    new_dir_path = os.path.join(current_path, "Songs/")
-                for root, dirs, files in os.walk(new_dir_path):
-                    for file in os.listdir(root):
-                        for ext in sopported_formats:
-                            if file.endswith(ext):
-                                similarity_ratio = sm(None, file, titleName + ext).ratio()
-                                if similarity_ratio > 0.97:match_files.append(os.path.join(root, file))
-                # Send matches to the user
-                if match_files:
-                    for audio_path in match_files:
-                        with open(audio_path, "rb") as audio:
-                            thumbal = songs.download_thumbnail(thumbal)
-                            await context.bot.send_audio(
-                                chat_id=update.message.chat_id,
-                                audio=audio,
-                                title=titleName,
-                                performer=artistName,
-                                duration=duration,
-                                thumbnail=thumbal,
-                                caption=f"Downloaded from YouTube\n @songytbbot"
-                            )
-                    songs.cleanTempdir(thumbal)
-                    db.close()
-                    user_db = usrdatabase()
-                    user_db.request_song(user['id'])
-                    user_db.close()
-                else:
-                    await update.message.reply_text(
-                        "Sorry, no matches were found for this song."
-                    )
+                # Search for matching files in the "Songs/" directory
+                match_files = []
+                current_path = os.getcwd()
+                new_dir_path = os.path.join(current_path, "Songs/")
+            for root, dirs, files in os.walk(new_dir_path):
+                for file in os.listdir(root):
+                    for ext in sopported_formats:
+                        if file.endswith(ext):
+                            similarity_ratio = sm(None, file, titleName + ext).ratio()
+                            if similarity_ratio > 0.97:match_files.append(os.path.join(root, file))
+            # Send matches to the user
+            if match_files:
+                for audio_path in match_files:
+                    with open(audio_path, "rb") as audio:
+                        thumbal = songs.download_thumbnail(thumbal)
+                        await context.bot.send_audio(
+                            chat_id=update.message.chat_id,
+                            audio=audio,
+                            title=titleName,
+                            performer=artistName,
+                            duration=duration,
+                            thumbnail=thumbal,
+                            caption=f"Downloaded from YouTube\n @songytbbot"
+                        )
+                songs.cleanTempdir(thumbal)
+                db.close()
+                user_db = usrdatabase()
+                user_db.request_song(user['id'])
+                user_db.close()
+            else:
+                await update.message.reply_text(
+                    "Sorry, no matches were found for this song."
+                )
     except Exception as e:
         # Error handling
         logger.error(f"Error: {e}")
