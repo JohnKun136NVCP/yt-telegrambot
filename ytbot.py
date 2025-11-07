@@ -210,7 +210,10 @@ async def yourid_command(update: Update, context: CallbackContext) -> None:
 
 
 async def changeCommands(application: Application) -> None:
-    command = [BotCommand("start", "Start the bot"), BotCommand("help", "Get help")]
+    command = [BotCommand("start", "Start interaction with the bot"), 
+               BotCommand("help", "Get help on how to use the bot"),
+               BotCommand("subscribe", "Subscribe to premium features and info"),
+               BotCommand("myid", "Show your Telegram user ID")]
     await application.bot.set_my_commands(command)
     await application.bot.set_chat_menu_button()
 
