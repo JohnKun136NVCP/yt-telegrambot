@@ -320,8 +320,8 @@ def main(TELEGRAM_TOKEN):
             httpx.ConnectError, httpx.ReadError, httpx.WriteTimeout, 
             httpx.PoolTimeout, httpx.NetworkError, httpx.ConnectTimeout,
             httpcore.ProtocolError, httpcore.ProxyError, httpcore.ConnectTimeout, 
-            httpcore.ReadTimeout, httpcore.WriteTimeout, httpcore.CloseError, 
-            httpcore.SocketError) as e:
+            httpcore.ReadTimeout, httpcore.WriteTimeout, 
+            httpcore.ConnectError) as e:
         logger.error(f"HTTPX/HTTPCORE-related error: {e}")
     except Exception as e:
         logger.error(f"Unexpected error in main: {e}")
