@@ -45,7 +45,7 @@ Usage:
 
     Import this module and call main(TELEGRAM_TOKEN) with your bot's token to start the bot.
 """
-
+import asyncio
 import httpx
 import httpcore
 import logging
@@ -74,7 +74,7 @@ from telegram.ext import (
 # Enable logging
 warnings.filterwarnings("error", category=PTBDeprecationWarning)
 logging.basicConfig(
-    #filename="botlogs.log",
+    filename="botlogs.log",
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
 )
 logging.getLogger('httpx').setLevel(logging.INFO)
@@ -180,7 +180,7 @@ async def subscribe_command(update: Update, context: CallbackContext) -> None:
     ⏳ _No time restrictions_
 
     🆓 *Free Version Limitations:*  
-    ⛔ Max *3 songs per day*  
+    ⛔ Max *1 song per day*  
     📜 Quote spanning is available, but limited
 
     💬 *Why support?*  
@@ -231,12 +231,16 @@ async def download(update: Update, context: CallbackContext) -> None:
         # To try to reset daily song counts if needed
         reset_result, reset_msg = user_db.reset_daily_song_counts(user['id'], user['username'])
         if reset_result:
-            await update.message.reply_text(f"🔄 {reset_msg}")
+            msg = await update.message.reply_text(f"🔄 {reset_msg}")
+            await asyncio.sleep(3)
+            await msg.delete()
         if not reset_result:
             logger.info(f"No reset needed for user {user['username']}: {reset_msg}")
         can_request, msg_request = user_db.can_request_song(user['id'])
         if not can_request:
-            await update.message.reply_text(f"🚫 {msg_request}")
+            msg =  await update.message.reply_text(f"🚫 {msg_request}")
+            await asyncio.sleep(5)
+            await msg.delete()
             user_db.close()
             return
         user_db.registerTimeRequest(user['id'])

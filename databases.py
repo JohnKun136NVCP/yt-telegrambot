@@ -131,7 +131,7 @@ class usrdatabase:
             return True, "Unlimited requests allowed."
 
         # No premium: máximo 3 canciones
-        if songs_by_day >= 3:
+        if songs_by_day >= 1:
             return False, "Daily song limit reached. Please wait until the next reset or upgrade to premium."
 
         return True, "Song request allowed."
