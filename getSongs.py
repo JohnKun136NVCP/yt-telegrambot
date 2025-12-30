@@ -2,7 +2,6 @@ import os
 import sys
 import shutil
 import os.path
-import ssl
 import re
 import requests
 import subprocess
@@ -11,9 +10,6 @@ from pytubefix import YouTube
 from pytubefix.cli import on_progress
 from metaSong import songsData
 
-#SSL certificates 
-# Certificates if not installed on Operating System
-ssl._create_default_https_context = ssl._create_unverified_context
 
 # Configure logging for errors
 error_handler = logging.FileHandler("errors.log")
