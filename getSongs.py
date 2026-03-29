@@ -162,29 +162,27 @@ class downloadSongsYb:
         except Exception as e:
             logger.error(f"Error getting file size: {e}")
 
-    def download_thumbnail(self,url_thumbnail):
+    def download_thumbnail(self, url_thumbnail, video_id):
         try:
-            if url_thumbnail is not None:
-                temp_dir = os.path.join(os.getcwd(), "temp")
-                os.makedirs(temp_dir, exist_ok=True)
-                img_path = os.path.join(temp_dir, "thumb.jpg")
+            if not url_thumbnail or not url_thumbnail.startswith("https"):
+                    return None
+            temp_dir = os.path.join(os.getcwd(), "temp")
+            os.makedirs(temp_dir, exist_ok=True)
+            img_path = os.path.join(temp_dir,f"{video_id}.jpg")
+            #Check if temp
+            if os.path.exists(img_path):
+                return img_path
+            else:
                 response = requests.get(url_thumbnail)
                 if response.status_code == 200:
                     with open(img_path, "wb") as img:
                         img.write(response.content)
                     return img_path
                 else:
-                    shutil.rmtree(temp_dir)
                     return None
-            else:return None    
         except Exception as e:
             logger.error(f"Error downloading thumbnail: {e}")
             return None
-    def cleanTempdir(self,img_path):
-        if img_path:
-            temp_dir = os.path.join(os.getcwd(), "temp")
-            if os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir)
     def movedFile(self):
         """
         Move downloaded audio files to the specified directory.

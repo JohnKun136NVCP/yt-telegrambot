@@ -257,47 +257,51 @@ async def download(update: Update, context: CallbackContext) -> None:
                 songs.songsData.duration,
                 songs.songsData.thumbalImg
             )
-            isOnDB, result = db.verifyURL(songs.id_url)
-            if isOnDB:
-                titleName, artistName, duration, thumbal = (
-                    result[1],
-                    result[2],
-                    result[4],
-                    result[5],
-                )
-                # Search for matching files in the "Songs/" directory
-                match_files = []
-                current_path = os.getcwd()
-                new_dir_path = os.path.join(current_path, "Songs/")
-            for root, dirs, files in os.walk(new_dir_path):
-                for file in os.listdir(root):
-                    for ext in sopported_formats:
-                        if file.endswith(ext):
-                            similarity_ratio = sm(None, file, titleName + ext).ratio()
-                            if similarity_ratio > 0.97:match_files.append(os.path.join(root, file))
-            # Send matches to the user
-            if match_files:
-                for audio_path in match_files:
-                    with open(audio_path, "rb") as audio:
-                        thumbal = songs.download_thumbnail(thumbal)
-                        await context.bot.send_audio(
-                            chat_id=update.message.chat_id,
-                            audio=audio,
-                            title=titleName,
-                            performer=artistName,
-                            duration=duration,
-                            thumbnail=thumbal,
-                            caption=f"Downloaded from YouTube\n @songytbbot"
-                        )
-                songs.cleanTempdir(thumbal)
-                db.close()
-                user_db = usrdatabase()
-                user_db.request_song(user['id'])
-                user_db.close()
-            else:
-                await update.message.reply_text(
-                    "Sorry, no matches were found for this song."
-                )
+        isOnDB, result = db.verifyURL(songs.id_url)
+        if not isOnDB:
+            await update.message.reply_text("Error retrieving song data.")
+            db.close()
+            return
+        titleName, artistName, id_video, duration, thumbal = (
+            result[1],
+            result[2],
+            result[3],
+            result[4],
+            result[5],
+        )
+        # Search for matching files in the "Songs/" directory
+        match_files = []
+        current_path = os.getcwd()
+        new_dir_path = os.path.join(current_path, "Songs/")
+        for root, dirs, files in os.walk(new_dir_path):
+            for file in os.listdir(root):
+                for ext in sopported_formats:
+                    if file.endswith(ext):
+                        similarity_ratio = sm(None, file, titleName + ext).ratio()
+                        if similarity_ratio > 0.97:match_files.append(os.path.join(root, file))
+        thumbal_url = thumbal
+        thumbal_path = songs.download_thumbnail(thumbal_url, id_video)
+        # Send matches to the user
+        if match_files:
+            for audio_path in match_files:
+                with open(audio_path, "rb") as audio:
+                    await context.bot.send_audio(
+                        chat_id=update.message.chat_id,
+                        audio=audio,
+                        title=titleName,
+                        performer=artistName,
+                        duration=duration,
+                        thumbnail=thumbal_path if thumbal_path else None,
+                        caption=f"Downloaded from YouTube\n @songytbbot"
+                    )
+            db.close()
+            user_db = usrdatabase()
+            user_db.request_song(user['id'])
+            user_db.close()
+        else:
+            await update.message.reply_text(
+                "Sorry, no matches were found for this song."
+            )
     except Exception as e:
         # Error handling
         logger.error(f"Error: {e}")
