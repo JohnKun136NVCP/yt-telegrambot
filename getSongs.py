@@ -166,7 +166,7 @@ class downloadSongsYb:
         try:
             if not url_thumbnail or not url_thumbnail.startswith("https"):
                     return None
-            temp_dir = os.path.join(os.getcwd(), "temp")
+            temp_dir = os.path.join(os.getcwd(), "thumbimg")
             os.makedirs(temp_dir, exist_ok=True)
             img_path = os.path.join(temp_dir,f"{video_id}.jpg")
             #Check if temp
