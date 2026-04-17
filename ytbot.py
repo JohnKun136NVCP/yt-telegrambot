@@ -1,50 +1,4 @@
-"""
-ytbot.py
-A Telegram bot for downloading songs from YouTube and sending them to users as audio files. 
-The bot manages user registration, handles YouTube song downloads, maintains a user database, 
-and sends daily messages or quotes to all registered users.
 
-Modules:
-
-    - httpx, httpcore: For HTTP requests and error handling.
-    - logging, warnings: For logging and warning management.
-    - os, sqlite3: For file and database operations.
-    - difflib: For filename similarity matching.
-    - getSongs: For downloading songs from YouTube.
-    - messages: For managing messages and quotes.
-    - databases: For user and YouTube song database management.
-    - datetime: For scheduling daily messages.
-    - telegram, telegram.ext: For Telegram bot API integration.
-
-Functions:
-
-    async def getUser(id, username):
-        Registers a user in the database if not already present and reorders user table IDs.
-    async def messageToUser(context):
-        Sends a daily message or quote to all registered users. Removes users who have blocked the bot.
-    async def start(update, context):
-        Handles the /start command. Registers the user and sends a welcome message.
-    async def help_command(update, context):
-        Handles the /help command. Registers the user and sends usage instructions.
-    async def changeCommands(application):
-        Sets the bot's command list and chat menu button.
-    async def download(update, context):
-        Handles incoming messages with YouTube links. Downloads the song, stores metadata, 
-        and sends the audio file to the user if found or downloaded.
-        Initializes and runs the Telegram bot application, sets up handlers, and schedules daily jobs.
-
-Logging:
-    
-    Logs errors and important events to 'botlogs.log'.
-
-Error Handling:
-
-    Handles database, HTTP, and Telegram API errors gracefully, logging them for debugging.
-
-Usage:
-
-    Import this module and call main(TELEGRAM_TOKEN) with your bot's token to start the bot.
-"""
 import asyncio
 import httpx
 import httpcore
@@ -87,6 +41,13 @@ logging.getLogger('httpcore').setLevel(logging.ERROR)
 logging.getLogger('httpcore').setLevel(logging.CRITICAL)
 logger = logging.getLogger(__name__)
 
+
+# Global error handler for unhandled exceptions
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error(msg="Exception not handled", exc_info=context.error)
+    if isinstance(context.error, (httpx.HTTPError, httpcore.ConnectError)):
+        if isinstance(update, Update) and update.effective_message:
+            await update.effective_message.reply_text("Warning: Network error occurred while processing your request. Please try again later.")
 
 
 
@@ -302,9 +263,12 @@ async def download(update: Update, context: CallbackContext) -> None:
             await update.message.reply_text(
                 "Sorry, no matches were found for this song."
             )
+    except (httpx.HTTPError, httpx.ConnectError, httpcore.ConnectError) as e:
+        logger.error("Network error while processing the request: %s", e)
+        # Skip message to user
     except Exception as e:
         # Error handling
-        logger.error(f"Error: {e}")
+        logger.error(f"Unexpected error while processing the request: {e}")
         await update.message.reply_text(f"Sorry, an error occurred while processing the request. Try again later.")
 
 def main(TELEGRAM_TOKEN):
@@ -314,6 +278,7 @@ def main(TELEGRAM_TOKEN):
         application.add_handler(CommandHandler("subscribe", subscribe_command))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("myid", yourid_command))
+        application.add_error_handler(error_handler)
         job_queue = application.job_queue
         job_queue.run_daily(
             messageToUser,
