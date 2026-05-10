@@ -9,7 +9,7 @@ import logging
 from pytubefix import YouTube
 from pytubefix.cli import on_progress
 from metaSong import songsData
-
+from pathlib import Path
 
 # Configure logging for errors
 error_handler = logging.FileHandler("errors.log")
@@ -42,8 +42,6 @@ class downloadSongsYb:
         __cleanNameArtist(): Cleans the artist name using a regex pattern.
         __addMetaData(downloaded_File): Extracts and updates metadata for the downloaded file.
         __convertToFlac(audio_path): Converts an audio file to FLAC format using ffmpeg.
-        __reduce_audio_quality(input_file, output_file, bitrate="128k", sample_rate="44100"):
-            Reduces the quality of an audio file using ffmpeg.
         __sizeOfFile(file_path): Checks the file size and converts formats to ensure size constraints.
         download_thumbnail(url_thumbnail): Downloads a thumbnail image from a URL.
         cleanTempdir(img_path): Cleans up the temporary directory used for thumbnails.
@@ -64,7 +62,12 @@ class downloadSongsYb:
         self.completeUrl = str
         self.songsData = songsData()
     def __cleanUpdate(self,filename):
-        return re.sub(r'[\\/*?:"<>|]',"",filename)
+        """
+        Cleans a filename by removing invalid characters and trimming it to 100 characters.
+        """
+        filename = re.sub(r'[<>:"/\\|?*]', '', filename) #First remove invalid characters
+        filename = re.sub(r'\s+', ' ', filename) #Then remove extra spaces
+        return filename.strip()[:100] #Finally, trim to 100 characters and remove leading/trailing spaces
     def regexUrl(self):
         match = re.search(self.regex, self.url)
         if match:
@@ -100,25 +103,13 @@ class downloadSongsYb:
         try:
             flac_data = audio_path.replace(".mp3", ".flac")
             if sys.platform == "linux" or sys.platform == "linux2" or sys.platform == "win32" or sys.platform == "darwin":
-                subprocess.run(["ffmpeg","-i",audio_path,"-f","flac","{}.flac".format(self.songsData.title)],stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["ffmpeg","-i",audio_path,"-f","flac",flac_data],check=True,stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if not os.path.exists(flac_data):
+                    logger.error(f"Error: FLAC file was not created at {flac_data}")
+                    raise FileNotFoundError(f"FLAC file was not created at {flac_data}")
                 self.songsData.updateFlacCover(flac_data)
         except Exception as e:
             logger.error(f"Error converting to FLAC: {e}")
-
-    def __reduce_audio_quality(input_file, output_file, bitrate="128k", sample_rate="44100"):
-        """ Reduce the quality of an MP3 or M4A file using ffmpeg. """
-        try:
-            command = [
-                "ffmpeg", "-i", input_file,
-                "-b:a", bitrate, "-ar", sample_rate,
-                "-c:a", "aac" if input_file.endswith(".m4a") else "libmp3lame",
-                "-y", output_file  # Overwrite existing file
-            ]
-            subprocess.run(command, check=True)
-            print(f"Compressed file saved as: {output_file}")
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Error reducing audio quality: {e}")
-
 
     def __sizeOfFile(self,file_path):
         """
@@ -130,7 +121,10 @@ class downloadSongsYb:
                 mb_m4a_size = os.path.getsize(file_path) / (1024 * 1024)
                 if mb_m4a_size < 49.9:
                     mp3_path = file_path.replace(".m4a",".mp3")
-                    subprocess.run(["ffmpeg","-i",file_path,"-ar","44100","{}.mp3".format(self.songsData.title)],stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.run(["ffmpeg","-i",file_path,"-ar","44100",mp3_path],check=True,stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    if not os.path.exists(mp3_path):
+                        logger.error(f"Error: MP3 file was not created at {mp3_path}")
+                        raise FileNotFoundError(f"MP3 file was not created at {mp3_path}")
                     mb_mp3_size = os.path.getsize(mp3_path) / (1024 * 1024)
                     if  mb_mp3_size < 49.9:
                         # Convert to flac

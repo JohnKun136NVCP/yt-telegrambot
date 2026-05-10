@@ -35,6 +35,8 @@ logging.getLogger('httpx').setLevel(logging.INFO)
 logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('httpx').setLevel(logging.ERROR)
 logging.getLogger('httpx').setLevel(logging.CRITICAL)
+logging.getLogger("telegram").setLevel(logging.CRITICAL)
+logging.getLogger("telegram.ext").setLevel(logging.CRITICAL)
 logging.getLogger('httpcore').setLevel(logging.INFO)
 logging.getLogger('httpcore').setLevel(logging.WARNING)
 logging.getLogger('httpcore').setLevel(logging.ERROR)
@@ -286,7 +288,7 @@ def main(TELEGRAM_TOKEN):
             days=(0, 1, 2, 3, 4, 5, 6)
         )
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download))
-        application.run_polling()
+        application.run_polling(drop_pending_updates=True, close_loop=False)
     except httpx.HTTPError as e:
         logger.error(f"HTTP error: {e}")
     except (httpx.RequestError, httpx.TransportError, httpx.TimeoutException, 
