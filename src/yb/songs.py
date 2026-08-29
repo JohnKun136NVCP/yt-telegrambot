@@ -693,16 +693,3 @@ class DownloadYB:
             )
 
             raise
-
-
-
-"""
-downloader = DownloadYB(
-        "https://www.youtube.com/watch?v=iupn_Jc8IBI"
-    )
-
-result = downloader.download()
-
-print(
-        f"Downloaded: {result}"
-    )"""
