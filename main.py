@@ -1,4 +1,4 @@
-from ytbot import main
+from src.bot import main
 from dotenv import load_dotenv
 import os
 

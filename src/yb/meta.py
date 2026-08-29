@@ -254,7 +254,7 @@ class songsData:
     def __init__(self):
 
         # IMPORTANT:
-        # None instead of str/int classes.
+        # Use real default values instead of str/int classes.
         self.thumbalImg: str | None = None
         self.title: str = ""
         self.artist: str = ""
@@ -266,13 +266,13 @@ class songsData:
 
     def updateTitle(self, title):
 
-        self.title = title or ""
+        self.title = str(title or "").strip()
 
         return self.title
 
     def updateArtist(self, artist):
 
-        self.artist = artist or ""
+        self.artist = str(artist or "").strip()
 
         return self.artist
 
@@ -285,7 +285,6 @@ class songsData:
         thumbnail_url: str | None
     ):
 
-        # This is the important fix.
         if not thumbnail_url:
             return None
 
@@ -293,6 +292,11 @@ class songsData:
             thumbnail_url,
             str
         ):
+            return None
+
+        thumbnail_url = thumbnail_url.strip()
+
+        if not thumbnail_url:
             return None
 
         match = self.THUMBNAIL_RE.match(
@@ -305,7 +309,12 @@ class songsData:
         # If YouTube gives us a valid URL
         # that doesn't match the regex,
         # keep it instead of returning None.
-        return thumbnail_url
+        if thumbnail_url.startswith(
+            ("http://", "https://")
+        ):
+            return thumbnail_url
+
+        return None
 
     def updateThumbalImg(
         self,
@@ -396,19 +405,31 @@ class songsData:
             str(audio_path)
         )
 
+        # -----------------------------------------------------
+        # Duration
+        # -----------------------------------------------------
+
         self.updateDuration(
             target
         )
 
-        target.delete()
+        # -----------------------------------------------------
+        # Make sure tags exist
+        # -----------------------------------------------------
 
-        target["\xa9nam"] = (
-            self.title
-        )
+        if target.tags is None:
+            target.add_tags()
 
-        target["\xa9ART"] = (
-            self.artist
-        )
+        # -----------------------------------------------------
+        # Metadata
+        # -----------------------------------------------------
+
+        target["\xa9nam"] = self.title
+        target["\xa9ART"] = self.artist
+
+        # -----------------------------------------------------
+        # Cover
+        # -----------------------------------------------------
 
         image_path = self._create_cover()
 
@@ -421,7 +442,7 @@ class songsData:
                     "rb"
                 ) as albumart:
 
-                    target.tags["covr"] = [
+                    target["covr"] = [
                         MP4Cover(
                             albumart.read(),
                             imageformat=(
@@ -430,6 +451,13 @@ class songsData:
                         )
                     ]
 
+            except Exception as e:
+
+                print(
+                    f"Warning: could not embed "
+                    f"M4A cover: {e}"
+                )
+
             finally:
 
                 Path(
@@ -437,6 +465,10 @@ class songsData:
                 ).unlink(
                     missing_ok=True
                 )
+
+        # -----------------------------------------------------
+        # Save
+        # -----------------------------------------------------
 
         target.save()
 
@@ -457,43 +489,65 @@ class songsData:
             str(audio_path)
         )
 
+        # -----------------------------------------------------
+        # Metadata
+        # -----------------------------------------------------
+
+        if self.title:
+            target["title"] = self.title
+
+        if self.artist:
+            target["artist"] = self.artist
+
+        # -----------------------------------------------------
+        # Cover
+        # -----------------------------------------------------
+
         image_path = self._create_cover()
 
-        if not image_path:
+        if image_path:
 
-            # No thumbnail = don't fail the
-            # entire download.
-            target.save()
-            return
+            try:
 
-        try:
+                with open(
+                    image_path,
+                    "rb"
+                ) as albumart:
 
-            with open(
-                image_path,
-                "rb"
-            ) as albumart:
+                    image_data = (
+                        albumart.read()
+                    )
 
-                image_data = (
-                    albumart.read()
+                image = Picture()
+
+                image.data = image_data
+                image.type = 3
+                image.mime = "image/png"
+                image.desc = "Cover"
+
+                target.clear_pictures()
+
+                target.add_picture(
+                    image
                 )
 
-            image = Picture()
+            except Exception as e:
 
-            image.data = image_data
-            image.type = 3
-            image.mime = "image/png"
+                print(
+                    f"Warning: could not embed "
+                    f"FLAC cover: {e}"
+                )
 
-            target.clear_pictures()
-            target.add_picture(
-                image
-            )
+            finally:
 
-            target.save()
+                Path(
+                    image_path
+                ).unlink(
+                    missing_ok=True
+                )
 
-        finally:
+        # -----------------------------------------------------
+        # Save
+        # -----------------------------------------------------
 
-            Path(
-                image_path
-            ).unlink(
-                missing_ok=True
-            )
+        target.save()

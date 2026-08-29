@@ -30,6 +30,14 @@ Note:
 
 import sqlite3
 from datetime import datetime, timedelta
+import logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)  # Capture all logs, including debug
+logger.setLevel(logging.INFO)  # Set the logger to capture INFO level and above
+
+logger.addHandler(logging.StreamHandler())  # Log to console
+logger.addHandler(logging.FileHandler("logs/database_debug.log"))  # Log to file
+logger.addHandler(logging.FileHandler("logs/database_info.log"))  # Log to file for INFO level
 """
 class usrdatabase:
     def __init__(self,id_user,username):
@@ -77,7 +85,7 @@ class usrdatabase:
         self.connect.close()
 """
 class usrdatabase:
-    def __init__(self, db_path="users.db"):
+    def __init__(self, db_path="database/users.db"):
         self.connect = sqlite3.connect(db_path)
         self.cursor = self.connect.cursor()
 
@@ -117,24 +125,96 @@ class usrdatabase:
         self.connect.commit()
 
     def can_request_song(self, id_user):
-        """Check if the user can request a song based on their daily limit and subscription status."""
-        self.cursor.execute('SELECT songs_by_day, premium, type_user FROM users WHERE telegram_id = ?', (id_user,))
+        """
+        Check whether the user can request a song.
+
+        Unlimited:
+            - premium = 1
+            - type_user = admin
+            - type_user = subscribed
+
+        Free:
+            - 1 song every 24 hours
+        """
+
+        self.cursor.execute(
+            """
+            SELECT
+                COALESCE(songs_by_day, 0),
+                COALESCE(premium, 0),
+                COALESCE(type_user, ''),
+                last_request_time
+            FROM users
+            WHERE telegram_id = ?
+            """,
+            (id_user,)
+        )
+
         result = self.cursor.fetchone()
 
         if not result:
             return False, "User not found in database."
 
-        songs_by_day, premium, type_user = result
+        songs_by_day, premium, type_user, last_request_time = result
 
-        # Premium o admin: ilimitado
-        if type_user.lower() in ["admin", "subscribed"] or premium:
+        songs_by_day = int(songs_by_day or 0)
+        premium = bool(premium)
+
+        type_user = str(
+            type_user or ""
+        ).strip().lower()
+
+        logger.info(
+            "User %s | songs=%s | premium=%s | type_user=%r | last_request=%r",
+            id_user,
+            songs_by_day,
+            premium,
+            type_user,
+            last_request_time
+        )
+
+        # =====================================================
+        # UNLIMITED
+        # =====================================================
+
+        if premium:
+            logger.info(
+                "User %s -> unlimited (premium)",
+                id_user
+            )
+
             return True, "Unlimited requests allowed."
 
-        # No premium: máximo 3 canciones
+        if type_user == "admin":
+            logger.info(
+                "User %s -> unlimited (admin)",
+                id_user
+            )
+
+            return True, "Unlimited requests allowed."
+
+        if type_user == "subscribed":
+            logger.info(
+                "User %s -> unlimited (subscribed)",
+                id_user
+            )
+
+            return True, "Unlimited requests allowed."
+
+        # =====================================================
+        # FREE USER
+        # =====================================================
+
         if songs_by_day >= 1:
-            return False, "Daily song limit reached. Please wait until the next reset or upgrade to premium."
+            return (
+                False,
+                "Daily song limit reached. "
+                "Please wait 24 hours or upgrade to premium."
+            )
 
         return True, "Song request allowed."
+
+
 
     def request_song(self, id_user):
         """Increment the song request count for the user."""
