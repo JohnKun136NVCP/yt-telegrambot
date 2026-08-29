@@ -145,6 +145,7 @@ async def subscribe_command(update: Update, context: CallbackContext) -> None:
     🆓 *Free Version Limitations:*  
     ⛔ Max *1 song per day*  
     📜 Quote spanning is available, but limited
+    🕒 Global limit 2 by all users per day
 
     💬 *Why support?*  
     This project is *free*, clean, and safe \\- no malicious scripts, no viruses, just pure functionality\\.  
@@ -186,15 +187,28 @@ async def download(
 ) -> None:
 
     user = update.effective_user
-    url = update.message.text.strip()
+    message = update.effective_message
+
+    if not message:
+        return
+
+    url = message.text.strip()
+
+    # =========================================================
+    # Register user
+    # =========================================================
 
     await getUser(
         user.id,
         user.username
     )
 
-    status_message = await update.message.reply_text(
-        "🔎 Finding the link..."
+    # =========================================================
+    # Status message
+    # =========================================================
+
+    status_message = await message.reply_text(
+        "🔎 Checking your request..."
     )
 
     db = None
@@ -217,6 +231,10 @@ async def download(
 
         user_db = usrdatabase()
 
+        # -----------------------------------------------------
+        # Reset individual user limit
+        # -----------------------------------------------------
+
         reset_result, reset_msg = (
             user_db.reset_daily_song_counts(
                 user.id,
@@ -230,9 +248,23 @@ async def download(
                 f"🔄 {reset_msg}"
             )
 
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)
 
-        can_request, msg_request = (
+        # -----------------------------------------------------
+        # Check whether user can download
+        #
+        # This checks:
+        #
+        # - premium
+        # - admin
+        # - subscribed
+        # - individual free limit
+        # - global free limit
+        #
+        # BUT does NOT consume the limit.
+        # -----------------------------------------------------
+
+        can_request, request_message = (
             user_db.can_request_song(
                 user.id
             )
@@ -241,14 +273,10 @@ async def download(
         if not can_request:
 
             await status_message.edit_text(
-                f"🚫 {msg_request}"
+                f"🚫 {request_message}"
             )
 
             return
-
-        user_db.registerTimeRequest(
-            user.id
-        )
 
         # =====================================================
         # YouTube database
@@ -260,22 +288,22 @@ async def download(
             songs.video_id
         )
 
+        # =====================================================
+        # DOWNLOAD NEW SONG
+        # =====================================================
+
         if not exists:
 
             # -------------------------------------------------
-            # Download
+            # Find client
             # -------------------------------------------------
 
             await status_message.edit_text(
-                "🔎 Finding a compatible client..."
+                "🔎 Finding a compatible YouTube client..."
             )
 
             # -------------------------------------------------
-            # IMPORTANT:
-            #
-            # DownloadYB is synchronous.
-            # Run it in another thread so Telegram
-            # remains responsive.
+            # Download
             # -------------------------------------------------
 
             await status_message.edit_text(
@@ -286,12 +314,29 @@ async def download(
                 songs.download
             )
 
+            if not final_file:
+
+                raise RuntimeError(
+                    "DownloadYB returned no file."
+                )
+
+            final_file = Path(
+                final_file
+            )
+
+            if not final_file.exists():
+
+                raise FileNotFoundError(
+                    f"Downloaded file does not exist: "
+                    f"{final_file}"
+                )
+
             # -------------------------------------------------
-            # Metadata is already stored in songs_data.
+            # Save metadata in database
             # -------------------------------------------------
 
             await status_message.edit_text(
-                "💾 Saving information..."
+                "💾 Saving song information..."
             )
 
             db.insertData(
@@ -302,16 +347,22 @@ async def download(
                 songs.songs_data.thumbalImg
             )
 
+        # =====================================================
+        # SONG ALREADY EXISTS
+        # =====================================================
+
         else:
 
             final_file = None
 
             await status_message.edit_text(
-                "📚 The song is already in the database."
+                "📚 Song already exists in the database."
             )
 
+            await asyncio.sleep(0.5)
+
         # =====================================================
-        # Get DB information
+        # Get metadata from database
         # =====================================================
 
         is_on_db, result = (
@@ -323,7 +374,7 @@ async def download(
         if not is_on_db:
 
             await status_message.edit_text(
-                "❌ Error retrieving song data."
+                "❌ Error retrieving song information."
             )
 
             return
@@ -342,7 +393,7 @@ async def download(
         # =====================================================
 
         await status_message.edit_text(
-            "🔎 Finding the audio file..."
+            "🔎 Locating the audio file..."
         )
 
         supported_formats = {
@@ -353,62 +404,90 @@ async def download(
 
         audio_path = None
 
-        # If this request downloaded the file,
-        # we already know exactly which file it is.
+        # -----------------------------------------------------
+        # If we downloaded it during this request,
+        # use the exact file.
+        # -----------------------------------------------------
+
         if final_file:
 
             if final_file.exists():
 
                 audio_path = final_file
 
-        # If it was already in DB, search Songs/.
+        # -----------------------------------------------------
+        # If it already existed in DB, search Songs/
+        # -----------------------------------------------------
+
         if audio_path is None:
 
             songs_dir = Path("Songs")
 
             if songs_dir.exists():
 
-                # Prefer exact ID in filename if available.
+                # -------------------------------------------------
+                # First: try YouTube ID
+                # -------------------------------------------------
+
                 for path in songs_dir.rglob("*"):
 
+                    if not path.is_file():
+                        continue
+
                     if (
-                        path.is_file()
-                        and path.suffix.lower()
-                        in supported_formats
+                        path.suffix.lower()
+                        not in supported_formats
                     ):
+                        continue
 
-                        if id_video in path.name:
+                    if id_video in path.name:
 
-                            audio_path = path
-                            break
+                        audio_path = path
 
-                # Fallback to title.
+                        break
+
+                # -------------------------------------------------
+                # Second: try exact title
+                # -------------------------------------------------
+
                 if audio_path is None:
 
                     normalized_title = (
-                        title_name.strip().lower()
+                        title_name
+                        .strip()
+                        .lower()
                     )
 
                     for path in songs_dir.rglob("*"):
 
+                        if not path.is_file():
+                            continue
+
                         if (
-                            path.is_file()
-                            and path.suffix.lower()
-                            in supported_formats
+                            path.suffix.lower()
+                            not in supported_formats
+                        ):
+                            continue
+
+                        if (
+                            path.stem
+                            .strip()
+                            .lower()
+                            == normalized_title
                         ):
 
-                            if (
-                                path.stem.strip().lower()
-                                == normalized_title
-                            ):
+                            audio_path = path
 
-                                audio_path = path
-                                break
+                            break
+
+        # =====================================================
+        # File not found
+        # =====================================================
 
         if audio_path is None:
 
             await status_message.edit_text(
-                "❌ No se encontró el archivo de audio."
+                "❌ No audio file was found for this song."
             )
 
             return
@@ -422,7 +501,7 @@ async def download(
         if thumbnail_url:
 
             await status_message.edit_text(
-                "🖼️ Uploading the thumbnail..."
+                "🖼️ Downloading the thumbnail..."
             )
 
             thumbnail_path = await asyncio.to_thread(
@@ -432,7 +511,7 @@ async def download(
             )
 
         # =====================================================
-        # Send audio
+        # Sending
         # =====================================================
 
         await status_message.edit_text(
@@ -461,12 +540,33 @@ async def download(
             )
 
         # =====================================================
-        # Register request
+        # IMPORTANT:
+        #
+        # Only register the request AFTER Telegram
+        # successfully sends the audio.
+        #
+        # Premium/admin/subscribed:
+        #     Does NOT consume global free quota.
+        #
+        # Free:
+        #     +1 personal request
+        #     +1 global request
         # =====================================================
 
-        user_db.request_song(
-            user.id
+        success, request_result = (
+            user_db.request_song(
+                user.id
+            )
         )
+
+        if not success:
+
+            logger.warning(
+                "Song was sent but request registration "
+                "failed for user %s: %s",
+                user.id,
+                request_result
+            )
 
         # =====================================================
         # Finished
@@ -476,7 +576,7 @@ async def download(
             "✅ Song sent successfully!"
         )
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
 
         try:
 
@@ -485,6 +585,10 @@ async def download(
         except BadRequest:
 
             pass
+
+    # =========================================================
+    # NETWORK ERROR
+    # =========================================================
 
     except (
         httpx.HTTPError,
@@ -501,13 +605,39 @@ async def download(
         try:
 
             await status_message.edit_text(
-                "🌐 Connection error. "
-                "Please try again."
+                "🌐 Connection error while processing "
+                "the song. Please try again later."
             )
 
         except Exception:
 
             pass
+
+    # =========================================================
+    # LIMIT / VALIDATION ERRORS
+    # =========================================================
+
+    except ValueError as e:
+
+        logger.warning(
+            "Invalid request from user %s: %s",
+            user.id,
+            e
+        )
+
+        try:
+
+            await status_message.edit_text(
+                "❌ The YouTube link is not valid."
+            )
+
+        except Exception:
+
+            pass
+
+    # =========================================================
+    # GENERAL ERROR
+    # =========================================================
 
     except Exception as e:
 
@@ -520,12 +650,16 @@ async def download(
 
             await status_message.edit_text(
                 "❌ An error occurred while processing "
-                "the song. Please try again."
+                "the song. Please try again later."
             )
 
         except Exception:
 
             pass
+
+    # =========================================================
+    # CLOSE DATABASES
+    # =========================================================
 
     finally:
 
@@ -533,15 +667,20 @@ async def download(
 
             try:
                 user_db.close()
+
             except Exception:
+
                 pass
 
         if db:
 
             try:
                 db.close()
+
             except Exception:
+
                 pass
+
 
 def main(TELEGRAM_TOKEN):
     try:
