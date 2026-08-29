@@ -1,87 +1,95 @@
 from pytubefix import YouTube
 import logging
+
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-logger.setLevel(logging.INFO)
-logger.setLevel(logging.WARNING)
-logger.setLevel(logging.ERROR)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-handler = logging.FileHandler("logs/authClients.log")
-handler.setFormatter(formatter)
-logger.addHandler(handler)
+
+if not logger.handlers:
+    logger.setLevel(logging.INFO)
+
+    handler = logging.FileHandler("logs/authClients.log")
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
 
 class AuthClient:
+
     def __init__(self, url: str):
         self.url = url
 
         self.clients = [
+            "ANDROID_VR",
             "WEB",
             "WEB_MUSIC",
-            "ANDROID_MUSIC",
             "IOS_MUSIC",
-            "WEB_SAFARI",
             "IOS",
-            "ANDROID_VR",
+            "WEB_SAFARI",
+            "ANDROID",
             "TV",
         ]
 
-        self.audio_streams = []
-        self.progressive_streams = []
-        self.type_stream = ""
-
-    def __update_type(self, stream_type):
-        self.type_stream = stream_type
-        return self.type_stream
-
     def check_clients(self):
+
         logger.info("Checking available clients...")
 
         for client in self.clients:
-            logger.info(f"Testing client: {client}")
+
+            logger.info("Testing client: %s", client)
 
             try:
-                yt = YouTube(self.url, client)
 
-                # Audio
+                yt = YouTube(
+                    self.url,
+                    client=client
+                )
+
+                streams = yt.streams
+
                 audio_streams = [
                     stream
-                    for stream in yt.streams
-                    if stream.mime_type.startswith("audio/")
-                    and not stream.is_sabr
+                    for stream in streams
+                    if (
+                        stream.mime_type
+                        and stream.mime_type.startswith("audio/")
+                        and not stream.is_sabr
+                    )
                 ]
 
                 if audio_streams:
-                    self.audio_streams = audio_streams
-                    self.__update_type("audio")
 
-                    return (
-                        self.audio_streams,
-                        self.type_stream,
-                        client,
+                    # Preferimos audio con mayor bitrate.
+                    audio_streams.sort(
+                        key=lambda s: (
+                            s.abr or "0"
+                        ),
+                        reverse=True
                     )
 
-                # Progressive
-                progressive_streams = [
-                    stream
-                    for stream in yt.streams
-                    if stream.is_progressive
-                    and stream.mime_type.startswith("video/")
-                    and not stream.is_sabr
-                ]
+                    audio = audio_streams[0]
 
-                if progressive_streams:
-                    self.progressive_streams = progressive_streams
-                    self.__update_type("progressive")
-
-                    return (
-                        self.progressive_streams,
-                        self.type_stream,
+                    logger.info(
+                        "Client %s works: %s (%s)",
                         client,
+                        audio,
+                        audio.abr
                     )
-                logger.error(f"  [ERROR] {client}: {type(e).__name__}: {e}")
+
+                    return yt, audio, client
+
+                logger.warning(
+                    "Client %s has no compatible audio stream",
+                    client
+                )
 
             except Exception as e:
-                logger.error(f"  [ERROR] {client}: {type(e).__name__}: {e}")
-                continue
+
+                logger.error(
+                    "Client %s failed: %s: %s",
+                    client,
+                    type(e).__name__,
+                    e
+                )
 
         return None
