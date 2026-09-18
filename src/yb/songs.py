@@ -4,6 +4,8 @@ import shutil
 import subprocess
 import requests
 from pathlib import Path
+from typing import Callable
+from mutagen import File
 
 from pytubefix import YouTube
 
@@ -66,6 +68,7 @@ class DownloadYB:
     ):
 
         self.url = url
+        self.progress_callback: Callable[[float], None] | None = None
 
         self.output_dir = Path(
             output_dir
@@ -83,6 +86,45 @@ class DownloadYB:
     # =========================================================
     # URL
     # =========================================================
+    def _on_progress(
+        self,
+        stream,
+        chunk,
+        bytes_remaining
+    ):
+        """
+        Callback de progreso de pytubefix.
+        Envía el porcentaje de descarga al bot.
+        """
+
+        try:
+            total_size = stream.filesize
+
+            if not total_size:
+                return
+
+            downloaded = total_size - bytes_remaining
+
+            percentage = (
+                downloaded / total_size
+            ) * 100
+
+            percentage = max(
+                0.0,
+                min(100.0, percentage)
+            )
+
+            if self.progress_callback:
+                self.progress_callback(
+                    percentage
+                )
+
+        except Exception as e:
+            logger.debug(
+                "Could not calculate download progress: %s",
+                e
+            )
+
 
     def regexUrl(self):
 
@@ -153,11 +195,37 @@ class DownloadYB:
             self.audio_stream
         )
 
+<<<<<<< Updated upstream
         logger.info(
             "Audio bitrate: %s",
             self.audio_stream.abr
         )
 
+=======
+        self.yt = YouTube(
+        self.completeUrl,
+        self.client,
+        on_progress_callback=self._on_progress
+        )
+
+
+        # Use the stream already discovered
+        # by AuthClient.
+        for stream in streams:
+
+            if (
+                stream.mime_type.startswith("audio/")
+                and not stream.is_sabr
+            ):
+
+                self.audio_stream = stream
+                break
+
+        if self.audio_stream is None:
+            raise RuntimeError(
+                "No compatible audio stream found."
+            )
+>>>>>>> Stashed changes
 
     # =========================================================
     # Metadata
@@ -331,7 +399,8 @@ class DownloadYB:
     def convert_to_mp3(
         self,
         input_file: Path,
-        sample_rate: int = 44100
+        sample_rate: int = 44100,
+        bitrate: str = "320k"
     ) -> Path:
 
         output_file = (
@@ -342,10 +411,15 @@ class DownloadYB:
             input_file,
             output_file,
             "-ar",
-            str(sample_rate)
+            str(sample_rate),
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            bitrate
         )
 
         return output_file
+
 
     def convert_to_flac(
         self,
@@ -394,76 +468,43 @@ class DownloadYB:
         )
 
         # -----------------------------------------------------
-        # Small M4A
+        # Try FLAC directly when possible
         # -----------------------------------------------------
 
         if size < self.MAX_SIZE_MB:
 
-            mp3 = self.convert_to_mp3(
-                audio_file,
-                sample_rate=44100
+            flac = self.convert_to_flac(
+                audio_file
             )
 
-            mp3_size = self.size_mb(
-                mp3
+            flac_size = self.size_mb(
+                flac
             )
 
             logger.info(
-                "MP3 size: %.2f MB",
-                mp3_size
+                "FLAC size: %.2f MB",
+                flac_size
             )
 
-            if mp3_size < self.MAX_SIZE_MB:
-
-                flac = self.convert_to_flac(
-                    mp3
-                )
-
-                flac_size = self.size_mb(
-                    flac
-                )
-
-                logger.info(
-                    "FLAC size: %.2f MB",
-                    flac_size
-                )
-
-                if flac_size < self.MAX_SIZE_MB:
-
-                    mp3.unlink(
-                        missing_ok=True
-                    )
-
-                    audio_file.unlink(
-                        missing_ok=True
-                    )
-
-                    return flac
-
-                # FLAC too large.
-                flac.unlink(
-                    missing_ok=True
-                )
+            if flac_size < self.MAX_SIZE_MB:
 
                 audio_file.unlink(
                     missing_ok=True
                 )
 
-                return mp3
+                return flac
 
-            audio_file.unlink(
+            flac.unlink(
                 missing_ok=True
             )
 
-            return mp3
-
         # -----------------------------------------------------
-        # Large M4A
+        # Fallback to MP3
         # -----------------------------------------------------
 
         mp3 = self.convert_to_mp3(
             audio_file,
-            sample_rate=22050
+            sample_rate=44100
         )
 
         audio_file.unlink(
@@ -471,6 +512,7 @@ class DownloadYB:
         )
 
         return mp3
+
 
     # =========================================================
     # Metadata
@@ -481,19 +523,14 @@ class DownloadYB:
         final_file: Path
     ):
 
-        suffix = (
-            final_file.suffix.lower()
-        )
+        suffix = final_file.suffix.lower()
 
         logger.info(
-            "Processing metadata: %s",
-            final_file
-        )
+        "Processing metadata: %s",
+        final_file
+    )
 
-        if suffix in (
-            ".m4a",
-            ".mp4"
-        ):
+        if suffix in (".m4a", ".mp4"):
 
             self.songs_data.updateMetaData(
                 str(final_file)
@@ -511,6 +548,43 @@ class DownloadYB:
                 "No metadata processor for: %s",
                 suffix
             )
+            
+    def get_final_duration(
+        self,
+        audio_path: Path
+    ) -> int:
+
+        try:
+
+            audio = File(
+                str(audio_path)
+            )
+
+            if audio and audio.info:
+
+                duration = int(
+                    audio.info.length
+                )
+
+                logger.info(
+                    "Final duration: %s seconds",
+                    duration
+                )
+
+                self.songs_data.duration = duration
+
+                return duration
+
+        except Exception as e:
+
+            logger.warning(
+                "Could not determine audio duration: %s",
+                e
+            )
+
+        self.songs_data.duration = 0
+
+        return 0
 
     # =========================================================
     # Move
@@ -660,7 +734,33 @@ class DownloadYB:
                 self.process_audio(
                     downloaded_file
                 )
-            )
+            )# Read the duration from the final processed file.
+            try:
+
+                from mutagen import File
+
+                audio_info = File(
+                    str(final_file)
+                )
+
+                if audio_info and audio_info.info:
+
+                    self.songs_data.duration = int(
+                        audio_info.info.length
+                    )
+
+                    logger.info(
+                        "Final audio duration: %s seconds",
+                        self.songs_data.duration
+                    )
+
+            except Exception as e:
+
+                logger.warning(
+                    "Could not read final audio duration: %s",
+                    e
+                )
+
 
             # -------------------------------------------------
             # 6. Process metadata
@@ -678,9 +778,22 @@ class DownloadYB:
                 final_file
             )
 
+            # -------------------------------------------------
+            # 8. Get REAL final duration
+            # -------------------------------------------------
+
+            self.get_final_duration(
+                final_file
+            )
+
             logger.info(
                 "Download completed: %s",
                 final_file
+            )
+
+            logger.info(
+                "Final duration: %s seconds",
+                self.songs_data.duration
             )
 
             return final_file

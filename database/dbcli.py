@@ -2,7 +2,8 @@ import sqlite3
 import sys
 from datetime import datetime
 class usersdb:
-    def __init__(self,db_path="database/users.db"):
+    def __init__(self, db_path="database/users.db"):
+
         self.connect = sqlite3.connect(db_path)
         self.cursor = self.connect.cursor()
 

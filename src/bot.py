@@ -62,64 +62,143 @@ async def getUser(id,username):
     except sqlite3.Error as e:
         logger.error(f"Database error: {e}")
 
-async def messageToUser(context: ContextTypes.DEFAULT_TYPE):
+async def messageToUser(
+    context: ContextTypes.DEFAULT_TYPE
+):
+    """
+    Send the daily random quote to non-premium users.
+    """
+
+    conn = None
+
     try:
+
         info = Quotes()
-        conn = sqlite3.connect("database/users.db")
+
+        # =====================================================
+        # Database
+        # =====================================================
+
+        conn = sqlite3.connect(
+            "database/users.db"
+        )
+
         cursor = conn.cursor()
 
-        # Filter non-premium users
         cursor.execute("""
-            SELECT telegram_id 
-            FROM users 
+            SELECT telegram_id
+            FROM users
             WHERE (premium = 0 OR premium IS NULL)
-            AND (type_user IS NULL OR LOWER(type_user) = 'unsubscribed')
+            AND (
+                type_user IS NULL
+                OR LOWER(type_user) = 'unsubscribed'
+            )
         """)
+
         result = cursor.fetchall()
 
         if not result:
-            logger.info("There are no non-premium users registered.")
-            conn.close()
+
+            logger.info(
+                "There are no non-premium users."
+            )
+
             return
 
-        non_premium_users = [row[0] for row in result]
+        non_premium_users = [
+            row[0]
+            for row in result
+        ]
 
-        # Check if custom message file exists
-        if os.path.exists(info.userMessage):
-            # Send custom message to non-premium users
-            message_text = info.showMessageUser()
-            if message_text:
-                for idUser in non_premium_users:
-                    try:
-                        await context.bot.send_message(
-                            chat_id=idUser,
-                            text=message_text,
-                            parse_mode="MarkdownV2"
-                        )
-                    except (BadRequest, Forbidden) as e:
-                        logger.error(f"Error sending mensaje a {idUser}: {e}")
-                        # If user has blocked the bot or other error, remove from database
-                        cursor.execute('DELETE FROM users WHERE telegram_id = ?', (idUser,))
-                        conn.commit()
-                else:
-                    info.get_quote()
-                    
-                    quote_text = f"✨ Quote of the day ✨\n{info.quouteString}"
-                    for idUser in non_premium_users:
-                        try:
-                            await context.bot.send_message(chat_id=idUser, text=quote_text)
-                        except (BadRequest, Forbidden) as e:
-                            logger.error(f"Error from user {idUser}: {e}")
-                            cursor.execute('DELETE FROM users WHERE telegram_id = ?', (idUser,))
-                            conn.commit()
+        # =====================================================
+        # Get quote
+        # =====================================================
 
-            else:
-                logger.warning(f"The file {info.userMessage} doesn't exists.")
+        quote = info.get_quote()
+
+        if not quote:
+
+            logger.warning(
+                "Could not obtain the daily quote."
+            )
+
+            return
+
+        # =====================================================
+        # Message
+        # =====================================================
+
+        quote_text = (
+            "✨ *Quote of the day* ✨\n\n"
+            f"_{quote}_"
+        )
+
+        # =====================================================
+        # Send
+        # =====================================================
+
+        for idUser in non_premium_users:
+
+            try:
+
+                await context.bot.send_message(
+                    chat_id=idUser,
+                    text=quote_text,
+                    parse_mode="Markdown"
+                )
+
+                logger.info(
+                    "Quote sent to user %s",
+                    idUser
+                )
+
+            except Forbidden:
+
+                logger.warning(
+                    "User %s blocked the bot. "
+                    "Removing from database.",
+                    idUser
+                )
+
+                cursor.execute(
+                    """
+                    DELETE FROM users
+                    WHERE telegram_id = ?
+                    """,
+                    (idUser,)
+                )
+
+                conn.commit()
+
+            except BadRequest as error:
+
+                logger.error(
+                    "BadRequest sending quote "
+                    "to %s: %s",
+                    idUser,
+                    error
+                )
+
+    except sqlite3.Error as error:
+
+        logger.error(
+            "Database error: %s",
+            error
+        )
+
+    except Exception as error:
+
+        logger.exception(
+            "Error sending daily quote: %s",
+            error
+        )
+
+    finally:
+
+        if conn:
 
             conn.close()
 
-    except sqlite3.Error as e:
-            logger.error(f"Database error: {e}")
 
 async def start(update: Update, context: CallbackContext) -> None:
     user = update.message.from_user
@@ -180,6 +259,106 @@ async def changeCommands(application: Application) -> None:
                BotCommand("myid", "Show your Telegram user ID")]
     await application.bot.set_my_commands(command)
     await application.bot.set_chat_menu_button()
+def create_progress_bar(
+    percentage: float,
+    length: int = 10
+) -> str:
+
+    percentage = max(
+        0.0,
+        min(100.0, percentage)
+    )
+
+    filled = int(
+        length * percentage / 100
+    )
+
+    empty = length - filled
+
+    return (
+        "━" * filled
+        + "░" * empty
+    )
+
+async def update_progress(
+    message,
+    download_status="⏳",
+    processing_status="⏳",
+    upload_status="⏳",
+    finished=False,
+    duration=None,
+    download_percentage=None
+):
+    """
+    Update the single persistent processing status message.
+    """
+
+    if download_percentage is not None:
+
+        progress_bar = create_progress_bar(
+            download_percentage
+        )
+
+        download_line = (
+            f"  {download_status} Downloading audio "
+            f"┃ {progress_bar} "
+            f"{download_percentage:.0f}%"
+        )
+
+    else:
+
+        download_line = (
+            f"  {download_status} Downloading audio"
+        )
+
+    text = (
+        "👩‍🔬 *Request processing:*\n\n"
+        f"{download_line}\n"
+        f"  {processing_status} Processing and optimization\n"
+        f"  {upload_status} Uploading to Telegram"
+    )
+
+    if finished:
+
+        if duration is not None and duration > 0:
+
+            minutes = duration // 60
+            seconds = duration % 60
+
+            duration_text = (
+                f"{minutes:02d}:{seconds:02d}"
+            )
+
+            text += (
+                "\n\n"
+                "🎵 *Download completed!*\n"
+                f"⏱ Duration: `{duration_text}`"
+            )
+
+        else:
+
+            text += (
+                "\n\n"
+                "🎵 *Download completed!*"
+            )
+
+    try:
+
+        await message.edit_text(
+            text,
+            parse_mode="Markdown"
+        )
+
+    except BadRequest as error:
+
+        if "Message is not modified" not in str(error):
+
+            logger.warning(
+                "Could not update status message: %s",
+                error
+            )
+
+
 
 async def download(
     update: Update,
@@ -207,9 +386,35 @@ async def download(
     # Status message
     # =========================================================
 
+<<<<<<< Updated upstream
     status_message = await message.reply_text(
         "🔎 Checking your request..."
+=======
+    status_message = await update.message.reply_text(
+        "👩‍🔬 *Request processing:*\n\n"
+        "  🔄 Downloading audio ┃ ░░░░░░░░░░ 0%\n"
+        "  ⏳ Processing and optimization\n"
+        "  ⏳ Uploading to Telegram",
+        parse_mode="Markdown"
+>>>>>>> Stashed changes
     )
+
+    # =========================================================
+    # Progress queue
+    # =========================================================
+
+    progress_queue = asyncio.Queue()
+
+    def download_progress_callback(percentage):
+        try:
+            progress_queue.put_nowait(
+                float(percentage)
+            )
+        except Exception as e:
+            logger.debug(
+                "Could not queue download progress: %s",
+                e
+            )
 
     db = None
     user_db = None
@@ -217,10 +422,18 @@ async def download(
     try:
 
         # =====================================================
-        # Create downloader
+        # Downloader
         # =====================================================
 
         songs = DownloadYB(url)
+
+        # IMPORTANTE:
+        # El callback debe asignarse ANTES de ejecutar
+        # songs.download()
+
+        songs.progress_callback = (
+            download_progress_callback
+        )
 
         songs.regexUrl()
         songs.generateYbUrl()
@@ -250,6 +463,7 @@ async def download(
 
             await asyncio.sleep(1)
 
+<<<<<<< Updated upstream
         # -----------------------------------------------------
         # Check whether user can download
         #
@@ -265,6 +479,17 @@ async def download(
         # -----------------------------------------------------
 
         can_request, request_message = (
+=======
+            await update_progress(
+                status_message,
+                download_status="🔄",
+                processing_status="⏳",
+                upload_status="⏳",
+                download_percentage=0
+            )
+
+        can_request, msg_request = (
+>>>>>>> Stashed changes
             user_db.can_request_song(
                 user.id
             )
@@ -289,11 +514,16 @@ async def download(
         )
 
         # =====================================================
+<<<<<<< Updated upstream
         # DOWNLOAD NEW SONG
+=======
+        # Download
+>>>>>>> Stashed changes
         # =====================================================
 
         if not exists:
 
+<<<<<<< Updated upstream
             # -------------------------------------------------
             # Find client
             # -------------------------------------------------
@@ -308,11 +538,25 @@ async def download(
 
             await status_message.edit_text(
                 "⬇️ Downloading the song..."
+=======
+            await update_progress(
+                status_message,
+                download_status="🔄",
+                processing_status="⏳",
+                upload_status="⏳",
+                download_percentage=0
             )
 
-            final_file = await asyncio.to_thread(
-                songs.download
+            # Ejecutar la descarga en otro thread para no
+            # bloquear el event loop de Telegram.
+            download_task = asyncio.create_task(
+                asyncio.to_thread(
+                    songs.download
+                )
+>>>>>>> Stashed changes
             )
+
+            last_percentage = -1
 
             if not final_file:
 
@@ -332,18 +576,96 @@ async def download(
                 )
 
             # -------------------------------------------------
+<<<<<<< Updated upstream
             # Save metadata in database
             # -------------------------------------------------
 
             await status_message.edit_text(
                 "💾 Saving song information..."
+=======
+            # Monitorizar progreso
+            # -------------------------------------------------
+
+            while not download_task.done():
+
+                try:
+
+                    percentage = await asyncio.wait_for(
+                        progress_queue.get(),
+                        timeout=0.5
+                    )
+
+                    percentage = max(
+                        0.0,
+                        min(100.0, float(percentage))
+                    )
+
+                    # Actualizar cada 5%
+                    rounded_percentage = (
+                        int(percentage) // 5
+                    ) * 5
+
+                    if rounded_percentage != last_percentage:
+
+                        last_percentage = (
+                            rounded_percentage
+                        )
+
+                        await update_progress(
+                            status_message,
+                            download_status="🔄",
+                            processing_status="⏳",
+                            upload_status="⏳",
+                            download_percentage=(
+                                rounded_percentage
+                            )
+                        )
+
+                except asyncio.TimeoutError:
+
+                    continue
+
+            # -------------------------------------------------
+            # Obtener resultado
+            # -------------------------------------------------
+
+            final_file = await download_task
+
+            # -------------------------------------------------
+            # Descargar terminado
+            # -------------------------------------------------
+
+            await update_progress(
+                status_message,
+                download_status="✅",
+                processing_status="🔄",
+                upload_status="⏳",
+                download_percentage=100
+>>>>>>> Stashed changes
             )
+
+            # =================================================
+            # Duration
+            # =================================================
+
+            duration = (
+                songs.songs_data.duration
+            )
+
+            logger.info(
+                "Duration for database: %s",
+                duration
+            )
+
+            # =================================================
+            # Save information
+            # =================================================
 
             db.insertData(
                 songs.songs_data.title,
                 songs.songs_data.artist,
                 songs.video_id,
-                songs.songs_data.duration,
+                duration,
                 songs.songs_data.thumbalImg
             )
 
@@ -353,10 +675,23 @@ async def download(
 
         else:
 
+            # =================================================
+            # Song already exists
+            # =================================================
+
             final_file = None
 
+<<<<<<< Updated upstream
             await status_message.edit_text(
                 "📚 Song already exists in the database."
+=======
+            await update_progress(
+                status_message,
+                download_status="✅",
+                processing_status="🔄",
+                upload_status="⏳",
+                download_percentage=100
+>>>>>>> Stashed changes
             )
 
             await asyncio.sleep(0.5)
@@ -389,13 +724,16 @@ async def download(
         ) = result
 
         # =====================================================
-        # Find audio file
+        # Find audio
         # =====================================================
 
+<<<<<<< Updated upstream
         await status_message.edit_text(
             "🔎 Locating the audio file..."
         )
 
+=======
+>>>>>>> Stashed changes
         supported_formats = {
             ".m4a",
             ".mp3",
@@ -405,8 +743,12 @@ async def download(
         audio_path = None
 
         # -----------------------------------------------------
+<<<<<<< Updated upstream
         # If we downloaded it during this request,
         # use the exact file.
+=======
+        # Use file returned by downloader
+>>>>>>> Stashed changes
         # -----------------------------------------------------
 
         if final_file:
@@ -416,7 +758,11 @@ async def download(
                 audio_path = final_file
 
         # -----------------------------------------------------
+<<<<<<< Updated upstream
         # If it already existed in DB, search Songs/
+=======
+        # Search Songs directory
+>>>>>>> Stashed changes
         # -----------------------------------------------------
 
         if audio_path is None:
@@ -425,21 +771,33 @@ async def download(
 
             if songs_dir.exists():
 
+<<<<<<< Updated upstream
                 # -------------------------------------------------
                 # First: try YouTube ID
                 # -------------------------------------------------
 
+=======
+                # First search by YouTube ID
+>>>>>>> Stashed changes
                 for path in songs_dir.rglob("*"):
 
                     if not path.is_file():
                         continue
 
                     if (
+<<<<<<< Updated upstream
                         path.suffix.lower()
                         not in supported_formats
+=======
+                        path.is_file()
+                        and path.suffix.lower()
+                        in supported_formats
+                        and id_video in path.name
+>>>>>>> Stashed changes
                     ):
                         continue
 
+<<<<<<< Updated upstream
                     if id_video in path.name:
 
                         audio_path = path
@@ -448,6 +806,13 @@ async def download(
 
                 # -------------------------------------------------
                 # Second: try exact title
+=======
+                        audio_path = path
+                        break
+
+                # -------------------------------------------------
+                # Fallback: search by title
+>>>>>>> Stashed changes
                 # -------------------------------------------------
 
                 if audio_path is None:
@@ -464,6 +829,7 @@ async def download(
                             continue
 
                         if (
+<<<<<<< Updated upstream
                             path.suffix.lower()
                             not in supported_formats
                         ):
@@ -473,13 +839,24 @@ async def download(
                             path.stem
                             .strip()
                             .lower()
+=======
+                            path.is_file()
+                            and path.suffix.lower()
+                            in supported_formats
+                            and path.stem.strip().lower()
+>>>>>>> Stashed changes
                             == normalized_title
                         ):
 
                             audio_path = path
+<<<<<<< Updated upstream
 
                             break
 
+=======
+                            break
+
+>>>>>>> Stashed changes
         # =====================================================
         # File not found
         # =====================================================
@@ -493,6 +870,51 @@ async def download(
             return
 
         # =====================================================
+        # Processing
+        # =====================================================
+
+        await update_progress(
+            status_message,
+            download_status="✅",
+            processing_status="🔄",
+            upload_status="⏳",
+            download_percentage=100
+        )
+
+        # =====================================================
+        # Get REAL duration
+        # =====================================================
+
+        try:
+
+            from mutagen import File
+
+            audio_info = File(
+                str(audio_path)
+            )
+
+            if (
+                audio_info
+                and audio_info.info
+            ):
+
+                duration = int(
+                    audio_info.info.length
+                )
+
+                logger.info(
+                    "Telegram duration: %s",
+                    duration
+                )
+
+        except Exception as e:
+
+            logger.warning(
+                "Could not read final duration: %s",
+                e
+            )
+
+        # =====================================================
         # Thumbnail
         # =====================================================
 
@@ -500,10 +922,13 @@ async def download(
 
         if thumbnail_url:
 
+<<<<<<< Updated upstream
             await status_message.edit_text(
                 "🖼️ Downloading the thumbnail..."
             )
 
+=======
+>>>>>>> Stashed changes
             thumbnail_path = await asyncio.to_thread(
                 songs.download_thumbnail,
                 thumbnail_url,
@@ -511,16 +936,22 @@ async def download(
             )
 
         # =====================================================
+<<<<<<< Updated upstream
         # Sending
+=======
+        # Upload
+>>>>>>> Stashed changes
         # =====================================================
 
-        await status_message.edit_text(
-            "📤 Sending the song..."
+        await update_progress(
+            status_message,
+            download_status="✅",
+            processing_status="✅",
+            upload_status="🔄",
+            download_percentage=100
         )
 
-        with audio_path.open(
-            "rb"
-        ) as audio:
+        with audio_path.open("rb") as audio:
 
             await context.bot.send_audio(
                 chat_id=update.effective_chat.id,
@@ -534,8 +965,8 @@ async def download(
                     else None
                 ),
                 caption=(
-                    "Downloaded from YouTube\n"
-                    "@songytbbot"
+                    "🎵 Downloaded from YouTube\n"
+                    "🤖 @songytbbot"
                 )
             )
 
@@ -573,18 +1004,22 @@ async def download(
         # =====================================================
 
         await status_message.edit_text(
-            "✅ Song sent successfully!"
+            "👩‍🔬 *Request processing:*\n\n"
+            "  ✅ Downloading audio ┃ ━━━━━━━━━━ 100%\n"
+            "  ✅ Processing and optimization\n"
+            "  ✅ Uploading to Telegram\n\n"
+            f"🎵 *{title_name}*\n"
+            f"👤 {artist_name}\n"
+            f"⏱ *Duration:* "
+            f"{duration // 60:02d}:{duration % 60:02d}",
+            parse_mode="Markdown"
         )
 
         await asyncio.sleep(2)
 
-        try:
-
-            await status_message.delete()
-
-        except BadRequest:
-
-            pass
+    # =========================================================
+    # Network error
+    # =========================================================
 
     # =========================================================
     # NETWORK ERROR
@@ -605,15 +1040,25 @@ async def download(
         try:
 
             await status_message.edit_text(
+<<<<<<< Updated upstream
                 "🌐 Connection error while processing "
                 "the song. Please try again later."
+=======
+                "👩‍🔬 *Request processing:*\n\n"
+                "  ❌ Downloading audio\n"
+                "  ⏳ Processing and optimization\n"
+                "  ⏳ Uploading to Telegram\n\n"
+                "🌐 Connection error. "
+                "Please try again.",
+                parse_mode="Markdown"
+>>>>>>> Stashed changes
             )
 
         except Exception:
-
             pass
 
     # =========================================================
+<<<<<<< Updated upstream
     # LIMIT / VALIDATION ERRORS
     # =========================================================
 
@@ -637,6 +1082,9 @@ async def download(
 
     # =========================================================
     # GENERAL ERROR
+=======
+    # Unexpected error
+>>>>>>> Stashed changes
     # =========================================================
 
     except Exception as e:
@@ -649,16 +1097,29 @@ async def download(
         try:
 
             await status_message.edit_text(
+<<<<<<< Updated upstream
                 "❌ An error occurred while processing "
                 "the song. Please try again later."
+=======
+                "👩‍🔬 *Request processing:*\n\n"
+                "  ❌ Downloading audio\n"
+                "  ❌ Processing and optimization\n"
+                "  ❌ Uploading to Telegram\n\n"
+                "❌ An error occurred while "
+                "processing the song.",
+                parse_mode="Markdown"
+>>>>>>> Stashed changes
             )
 
         except Exception:
-
             pass
 
     # =========================================================
+<<<<<<< Updated upstream
     # CLOSE DATABASES
+=======
+    # Cleanup
+>>>>>>> Stashed changes
     # =========================================================
 
     finally:
