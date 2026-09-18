@@ -85,39 +85,14 @@ class usrdatabase:
         self.connect.close()
 """
 class usrdatabase:
-<<<<<<< Updated upstream
-
-    # =========================================================
-    # CONFIGURATION
-    # =========================================================
-
-    FREE_USER_DAILY_LIMIT = 1
-
-    # Maximum FREE downloads shared by ALL free users.
-    GLOBAL_FREE_DAILY_LIMIT = 2
-
-    # =========================================================
-    # INIT
-    # =========================================================
-
-    def __init__(self, db_path="database/users.db"):
-
-        self.connect = sqlite3.connect(
-            db_path
-        )
-
-=======
     def __init__(self, db_path="database/users.db"):
         self.connect = sqlite3.connect(db_path)
->>>>>>> Stashed changes
         self.cursor = self.connect.cursor()
 
         # -----------------------------------------------------
         # Users
         # -----------------------------------------------------
 
-<<<<<<< Updated upstream
-=======
         # Tabla para el registro del último reset
         self.cursor.execute('''CREATE TABLE IF NOT EXISTS reset_log (
             id INTEGER PRIMARY KEY,
@@ -306,7 +281,6 @@ class usrdatabase:
         self.cursor.execute('UPDATE users SET songs_by_day = 0 WHERE telegram_id = ?', (id_user,))
 
         # Update the last reset time
->>>>>>> Stashed changes
         self.cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS users (

@@ -224,7 +224,6 @@ async def subscribe_command(update: Update, context: CallbackContext) -> None:
     🆓 *Free Version Limitations:*  
     ⛔ Max *1 song per day*  
     📜 Quote spanning is available, but limited
-    🕒 Global limit 2 by all users per day
 
     💬 *Why support?*  
     This project is *free*, clean, and safe \\- no malicious scripts, no viruses, just pure functionality\\.  
@@ -366,16 +365,7 @@ async def download(
 ) -> None:
 
     user = update.effective_user
-    message = update.effective_message
-
-    if not message:
-        return
-
-    url = message.text.strip()
-
-    # =========================================================
-    # Register user
-    # =========================================================
+    url = update.message.text.strip()
 
     await getUser(
         user.id,
@@ -386,17 +376,12 @@ async def download(
     # Status message
     # =========================================================
 
-<<<<<<< Updated upstream
-    status_message = await message.reply_text(
-        "🔎 Checking your request..."
-=======
     status_message = await update.message.reply_text(
         "👩‍🔬 *Request processing:*\n\n"
         "  🔄 Downloading audio ┃ ░░░░░░░░░░ 0%\n"
         "  ⏳ Processing and optimization\n"
         "  ⏳ Uploading to Telegram",
         parse_mode="Markdown"
->>>>>>> Stashed changes
     )
 
     # =========================================================
@@ -444,10 +429,6 @@ async def download(
 
         user_db = usrdatabase()
 
-        # -----------------------------------------------------
-        # Reset individual user limit
-        # -----------------------------------------------------
-
         reset_result, reset_msg = (
             user_db.reset_daily_song_counts(
                 user.id,
@@ -461,25 +442,8 @@ async def download(
                 f"🔄 {reset_msg}"
             )
 
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
 
-<<<<<<< Updated upstream
-        # -----------------------------------------------------
-        # Check whether user can download
-        #
-        # This checks:
-        #
-        # - premium
-        # - admin
-        # - subscribed
-        # - individual free limit
-        # - global free limit
-        #
-        # BUT does NOT consume the limit.
-        # -----------------------------------------------------
-
-        can_request, request_message = (
-=======
             await update_progress(
                 status_message,
                 download_status="🔄",
@@ -489,7 +453,6 @@ async def download(
             )
 
         can_request, msg_request = (
->>>>>>> Stashed changes
             user_db.can_request_song(
                 user.id
             )
@@ -498,10 +461,14 @@ async def download(
         if not can_request:
 
             await status_message.edit_text(
-                f"🚫 {request_message}"
+                f"🚫 {msg_request}"
             )
 
             return
+
+        user_db.registerTimeRequest(
+            user.id
+        )
 
         # =====================================================
         # YouTube database
@@ -514,31 +481,11 @@ async def download(
         )
 
         # =====================================================
-<<<<<<< Updated upstream
-        # DOWNLOAD NEW SONG
-=======
         # Download
->>>>>>> Stashed changes
         # =====================================================
 
         if not exists:
 
-<<<<<<< Updated upstream
-            # -------------------------------------------------
-            # Find client
-            # -------------------------------------------------
-
-            await status_message.edit_text(
-                "🔎 Finding a compatible YouTube client..."
-            )
-
-            # -------------------------------------------------
-            # Download
-            # -------------------------------------------------
-
-            await status_message.edit_text(
-                "⬇️ Downloading the song..."
-=======
             await update_progress(
                 status_message,
                 download_status="🔄",
@@ -553,36 +500,11 @@ async def download(
                 asyncio.to_thread(
                     songs.download
                 )
->>>>>>> Stashed changes
             )
 
             last_percentage = -1
 
-            if not final_file:
-
-                raise RuntimeError(
-                    "DownloadYB returned no file."
-                )
-
-            final_file = Path(
-                final_file
-            )
-
-            if not final_file.exists():
-
-                raise FileNotFoundError(
-                    f"Downloaded file does not exist: "
-                    f"{final_file}"
-                )
-
             # -------------------------------------------------
-<<<<<<< Updated upstream
-            # Save metadata in database
-            # -------------------------------------------------
-
-            await status_message.edit_text(
-                "💾 Saving song information..."
-=======
             # Monitorizar progreso
             # -------------------------------------------------
 
@@ -641,7 +563,6 @@ async def download(
                 processing_status="🔄",
                 upload_status="⏳",
                 download_percentage=100
->>>>>>> Stashed changes
             )
 
             # =================================================
@@ -669,10 +590,6 @@ async def download(
                 songs.songs_data.thumbalImg
             )
 
-        # =====================================================
-        # SONG ALREADY EXISTS
-        # =====================================================
-
         else:
 
             # =================================================
@@ -681,23 +598,16 @@ async def download(
 
             final_file = None
 
-<<<<<<< Updated upstream
-            await status_message.edit_text(
-                "📚 Song already exists in the database."
-=======
             await update_progress(
                 status_message,
                 download_status="✅",
                 processing_status="🔄",
                 upload_status="⏳",
                 download_percentage=100
->>>>>>> Stashed changes
             )
 
-            await asyncio.sleep(0.5)
-
         # =====================================================
-        # Get metadata from database
+        # Get DB information
         # =====================================================
 
         is_on_db, result = (
@@ -709,7 +619,7 @@ async def download(
         if not is_on_db:
 
             await status_message.edit_text(
-                "❌ Error retrieving song information."
+                "❌ Error retrieving song data."
             )
 
             return
@@ -727,13 +637,6 @@ async def download(
         # Find audio
         # =====================================================
 
-<<<<<<< Updated upstream
-        await status_message.edit_text(
-            "🔎 Locating the audio file..."
-        )
-
-=======
->>>>>>> Stashed changes
         supported_formats = {
             ".m4a",
             ".mp3",
@@ -743,12 +646,7 @@ async def download(
         audio_path = None
 
         # -----------------------------------------------------
-<<<<<<< Updated upstream
-        # If we downloaded it during this request,
-        # use the exact file.
-=======
         # Use file returned by downloader
->>>>>>> Stashed changes
         # -----------------------------------------------------
 
         if final_file:
@@ -758,11 +656,7 @@ async def download(
                 audio_path = final_file
 
         # -----------------------------------------------------
-<<<<<<< Updated upstream
-        # If it already existed in DB, search Songs/
-=======
         # Search Songs directory
->>>>>>> Stashed changes
         # -----------------------------------------------------
 
         if audio_path is None:
@@ -771,92 +665,42 @@ async def download(
 
             if songs_dir.exists():
 
-<<<<<<< Updated upstream
-                # -------------------------------------------------
-                # First: try YouTube ID
-                # -------------------------------------------------
-
-=======
                 # First search by YouTube ID
->>>>>>> Stashed changes
                 for path in songs_dir.rglob("*"):
 
-                    if not path.is_file():
-                        continue
-
                     if (
-<<<<<<< Updated upstream
-                        path.suffix.lower()
-                        not in supported_formats
-=======
                         path.is_file()
                         and path.suffix.lower()
                         in supported_formats
                         and id_video in path.name
->>>>>>> Stashed changes
                     ):
-                        continue
 
-<<<<<<< Updated upstream
-                    if id_video in path.name:
-
-                        audio_path = path
-
-                        break
-
-                # -------------------------------------------------
-                # Second: try exact title
-=======
                         audio_path = path
                         break
 
                 # -------------------------------------------------
                 # Fallback: search by title
->>>>>>> Stashed changes
                 # -------------------------------------------------
 
                 if audio_path is None:
 
                     normalized_title = (
-                        title_name
-                        .strip()
-                        .lower()
+                        title_name.strip().lower()
                     )
 
                     for path in songs_dir.rglob("*"):
 
-                        if not path.is_file():
-                            continue
-
                         if (
-<<<<<<< Updated upstream
-                            path.suffix.lower()
-                            not in supported_formats
-                        ):
-                            continue
-
-                        if (
-                            path.stem
-                            .strip()
-                            .lower()
-=======
                             path.is_file()
                             and path.suffix.lower()
                             in supported_formats
                             and path.stem.strip().lower()
->>>>>>> Stashed changes
                             == normalized_title
                         ):
 
                             audio_path = path
-<<<<<<< Updated upstream
-
                             break
 
-=======
-                            break
-
->>>>>>> Stashed changes
         # =====================================================
         # File not found
         # =====================================================
@@ -864,7 +708,7 @@ async def download(
         if audio_path is None:
 
             await status_message.edit_text(
-                "❌ No audio file was found for this song."
+                "❌ No se encontró el archivo de audio."
             )
 
             return
@@ -922,13 +766,6 @@ async def download(
 
         if thumbnail_url:
 
-<<<<<<< Updated upstream
-            await status_message.edit_text(
-                "🖼️ Downloading the thumbnail..."
-            )
-
-=======
->>>>>>> Stashed changes
             thumbnail_path = await asyncio.to_thread(
                 songs.download_thumbnail,
                 thumbnail_url,
@@ -936,11 +773,7 @@ async def download(
             )
 
         # =====================================================
-<<<<<<< Updated upstream
-        # Sending
-=======
         # Upload
->>>>>>> Stashed changes
         # =====================================================
 
         await update_progress(
@@ -971,33 +804,12 @@ async def download(
             )
 
         # =====================================================
-        # IMPORTANT:
-        #
-        # Only register the request AFTER Telegram
-        # successfully sends the audio.
-        #
-        # Premium/admin/subscribed:
-        #     Does NOT consume global free quota.
-        #
-        # Free:
-        #     +1 personal request
-        #     +1 global request
+        # Register request
         # =====================================================
 
-        success, request_result = (
-            user_db.request_song(
-                user.id
-            )
+        user_db.request_song(
+            user.id
         )
-
-        if not success:
-
-            logger.warning(
-                "Song was sent but request registration "
-                "failed for user %s: %s",
-                user.id,
-                request_result
-            )
 
         # =====================================================
         # Finished
@@ -1015,14 +827,10 @@ async def download(
             parse_mode="Markdown"
         )
 
-        await asyncio.sleep(2)
+        await asyncio.sleep(3)
 
     # =========================================================
     # Network error
-    # =========================================================
-
-    # =========================================================
-    # NETWORK ERROR
     # =========================================================
 
     except (
@@ -1040,10 +848,6 @@ async def download(
         try:
 
             await status_message.edit_text(
-<<<<<<< Updated upstream
-                "🌐 Connection error while processing "
-                "the song. Please try again later."
-=======
                 "👩‍🔬 *Request processing:*\n\n"
                 "  ❌ Downloading audio\n"
                 "  ⏳ Processing and optimization\n"
@@ -1051,40 +855,13 @@ async def download(
                 "🌐 Connection error. "
                 "Please try again.",
                 parse_mode="Markdown"
->>>>>>> Stashed changes
             )
 
         except Exception:
             pass
 
     # =========================================================
-<<<<<<< Updated upstream
-    # LIMIT / VALIDATION ERRORS
-    # =========================================================
-
-    except ValueError as e:
-
-        logger.warning(
-            "Invalid request from user %s: %s",
-            user.id,
-            e
-        )
-
-        try:
-
-            await status_message.edit_text(
-                "❌ The YouTube link is not valid."
-            )
-
-        except Exception:
-
-            pass
-
-    # =========================================================
-    # GENERAL ERROR
-=======
     # Unexpected error
->>>>>>> Stashed changes
     # =========================================================
 
     except Exception as e:
@@ -1097,10 +874,6 @@ async def download(
         try:
 
             await status_message.edit_text(
-<<<<<<< Updated upstream
-                "❌ An error occurred while processing "
-                "the song. Please try again later."
-=======
                 "👩‍🔬 *Request processing:*\n\n"
                 "  ❌ Downloading audio\n"
                 "  ❌ Processing and optimization\n"
@@ -1108,18 +881,13 @@ async def download(
                 "❌ An error occurred while "
                 "processing the song.",
                 parse_mode="Markdown"
->>>>>>> Stashed changes
             )
 
         except Exception:
             pass
 
     # =========================================================
-<<<<<<< Updated upstream
-    # CLOSE DATABASES
-=======
     # Cleanup
->>>>>>> Stashed changes
     # =========================================================
 
     finally:
@@ -1128,18 +896,14 @@ async def download(
 
             try:
                 user_db.close()
-
             except Exception:
-
                 pass
 
         if db:
 
             try:
                 db.close()
-
             except Exception:
-
                 pass
 
 

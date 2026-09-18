@@ -165,7 +165,7 @@ class DownloadYB:
             self.generateYbUrl()
 
         logger.info(
-            "Searching for compatible YouTube client..."
+            "Searching for compatible client..."
         )
 
         auth_client = AuthClient(
@@ -179,11 +179,9 @@ class DownloadYB:
                 "No compatible YouTube client found."
             )
 
-        (
-            self.yt,
-            self.audio_stream,
-            self.client,
-        ) = result
+        streams, stream_type, client = result
+
+        self.client = client
 
         logger.info(
             "Using client: %s",
@@ -191,17 +189,10 @@ class DownloadYB:
         )
 
         logger.info(
-            "Audio stream: %s",
-            self.audio_stream
+            "Stream type: %s",
+            stream_type
         )
 
-<<<<<<< Updated upstream
-        logger.info(
-            "Audio bitrate: %s",
-            self.audio_stream.abr
-        )
-
-=======
         self.yt = YouTube(
         self.completeUrl,
         self.client,
@@ -225,7 +216,6 @@ class DownloadYB:
             raise RuntimeError(
                 "No compatible audio stream found."
             )
->>>>>>> Stashed changes
 
     # =========================================================
     # Metadata
