@@ -179,8 +179,12 @@ class DownloadYB:
                 "No compatible YouTube client found."
             )
 
-        streams, stream_type, client = result
+        # AuthClient devuelve:
+        # (YouTube, audio_stream, client)
+        yt, audio_stream, client = result
 
+        self.yt = yt
+        self.audio_stream = audio_stream
         self.client = client
 
         logger.info(
@@ -189,33 +193,14 @@ class DownloadYB:
         )
 
         logger.info(
-            "Stream type: %s",
-            stream_type
+            "Selected audio stream: %s",
+            self.audio_stream
         )
 
-        self.yt = YouTube(
-        self.completeUrl,
-        self.client,
-        on_progress_callback=self._on_progress
+        logger.info(
+            "Audio bitrate: %s",
+            self.audio_stream.abr
         )
-
-
-        # Use the stream already discovered
-        # by AuthClient.
-        for stream in streams:
-
-            if (
-                stream.mime_type.startswith("audio/")
-                and not stream.is_sabr
-            ):
-
-                self.audio_stream = stream
-                break
-
-        if self.audio_stream is None:
-            raise RuntimeError(
-                "No compatible audio stream found."
-            )
 
     # =========================================================
     # Metadata
