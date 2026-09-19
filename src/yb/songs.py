@@ -1,78 +1,66 @@
-import logging
+"""Download YouTube audio, convert it and tag it."""
+
 import re
 import shutil
 import subprocess
-import requests
 from pathlib import Path
 from typing import Callable
-from mutagen import File
 
-from pytubefix import YouTube
+from mutagen import File as MutagenFile
 
+from src.logging_utils import get_file_logger
 from src.yb.authClients import AuthClient
-from src.yb.meta import songsData
+from src.yb.meta import songsData, tagsong
+
+logger = get_file_logger(__name__, "songs.log")
 
 
-logger = logging.getLogger(__name__)
-
-if not logger.handlers:
-
-    logger.setLevel(logging.INFO)
-
-    handler = logging.FileHandler(
-        "logs/songs.log"
-    )
-
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - "
-        "%(levelname)s - %(message)s"
-    )
-
-    handler.setFormatter(
-        formatter
-    )
-
-    logger.addHandler(
-        handler
-    )
+class AudioTooLargeError(Exception):
+    """The audio cannot fit in Telegram's 50 MB upload limit."""
 
 
 class DownloadYB:
-    """
-    Download YouTube audio and process metadata.
+    """Download YouTube audio and process its metadata.
+
+    Final files are stored as ``<output_dir>/<video_id>.<ext>``. Using the
+    video ID as file name makes lookups exact (the old title-based names could
+    never be found again) and avoids collisions between different videos with
+    the same title.
     """
 
     YOUTUBE_ID_RE = re.compile(
-        r"(?:v=|youtu\.be/|youtube\.com/shorts/)"
-        r"([A-Za-z0-9_-]{11})"
+        r"(?:v=|youtu\.be/|/shorts/|/live/|/embed/)([A-Za-z0-9_-]{11})"
     )
+    INVALID_FILENAME_RE = re.compile(r'[<>:"/\\|?*]')
+    SPACES_RE = re.compile(r"\s+")
+    TOPIC_RE = re.compile(r"^(.*) - Topic$")
 
-    INVALID_FILENAME_RE = re.compile(
-        r'[<>:"/\\|?*]'
-    )
-
-    SPACES_RE = re.compile(
-        r"\s+"
-    )
-
-    TOPIC_RE = re.compile(
-        r"^(.*) - Topic$"
-    )
-
+    # Telegram bots can upload up to 50 MB.
     MAX_SIZE_MB = 49.9
+
+    # True: convert to FLAC when it fits. False: keep the original M4A (no
+    # transcoding, much faster, and it plays in Telegram's music player).
+    PREFER_FLAC = True
+
+    # MP3 fallback bitrates, tried from best to smallest until the file fits.
+    MP3_BITRATES = ("320k", "192k", "128k")
 
     def __init__(
         self,
         url: str,
-        output_dir: str | Path = "Songs"
+        output_dir: str | Path = "Songs",
+        temp_dir: str | Path = "tmp_downloads",
+        thumb_dir: str | Path = "thumbimg",
     ):
-
         self.url = url
-        self.progress_callback: Callable[[float], None] | None = None
+        self.output_dir = Path(output_dir)
+        self.temp_dir = Path(temp_dir)
+        self.thumb_dir = Path(thumb_dir)
 
-        self.output_dir = Path(
-            output_dir
-        )
+        # Receives the download percentage (0-100). It is called from the
+        # worker thread that runs ``download()``.
+        self.progress_callback: Callable[[float], None] | None = None
+        self._last_reported = -1
 
         self.video_id: str | None = None
         self.completeUrl: str | None = None
@@ -83,701 +71,339 @@ class DownloadYB:
 
         self.songs_data = songsData()
 
-    # =========================================================
+    # =========================================================================
     # URL
-    # =========================================================
-    def _on_progress(
-        self,
-        stream,
-        chunk,
-        bytes_remaining
-    ):
-        """
-        Callback de progreso de pytubefix.
-        Envía el porcentaje de descarga al bot.
-        """
+    # =========================================================================
 
-        try:
-            total_size = stream.filesize
-
-            if not total_size:
-                return
-
-            downloaded = total_size - bytes_remaining
-
-            percentage = (
-                downloaded / total_size
-            ) * 100
-
-            percentage = max(
-                0.0,
-                min(100.0, percentage)
-            )
-
-            if self.progress_callback:
-                self.progress_callback(
-                    percentage
-                )
-
-        except Exception as e:
-            logger.debug(
-                "Could not calculate download progress: %s",
-                e
-            )
-
-
-    def regexUrl(self):
-
-        match = self.YOUTUBE_ID_RE.search(
-            self.url
-        )
+    def regexUrl(self) -> str:
+        match = self.YOUTUBE_ID_RE.search(self.url)
 
         if not match:
-            raise ValueError(
-                f"Invalid YouTube URL: {self.url}"
-            )
+            raise ValueError(f"Invalid YouTube URL: {self.url}")
 
-        self.video_id = (
-            match.group(1)
-        )
-
+        self.video_id = match.group(1)
         return self.video_id
 
-    def generateYbUrl(self):
-
+    def generateYbUrl(self) -> str:
         if not self.video_id:
             self.regexUrl()
 
-        self.completeUrl = (
-            "https://www.youtube.com/watch?v="
-            f"{self.video_id}"
-        )
-
+        self.completeUrl = f"https://www.youtube.com/watch?v={self.video_id}"
         return self.completeUrl
 
-    # =========================================================
+    # =========================================================================
+    # Download progress
+    # =========================================================================
+
+    def _on_progress(self, stream, chunk, bytes_remaining) -> None:
+        """pytubefix callback: forward the percentage when it changes."""
+        total = stream.filesize
+
+        if not total or self.progress_callback is None:
+            return
+
+        percentage = (total - bytes_remaining) / total * 100
+        percentage = max(0.0, min(100.0, percentage))
+
+        # pytubefix calls this for every chunk; only report whole-percent steps.
+        if int(percentage) == self._last_reported:
+            return
+
+        self._last_reported = int(percentage)
+
+        try:
+            self.progress_callback(percentage)
+        except Exception as error:
+            logger.debug("Progress callback failed: %s", error)
+
+    # =========================================================================
     # YouTube client
-    # =========================================================
+    # =========================================================================
 
-    def initialize_youtube(self):
-
+    def initialize_youtube(self) -> None:
         if not self.completeUrl:
             self.generateYbUrl()
 
-        logger.info(
-            "Searching for compatible client..."
-        )
+        logger.info("Searching for compatible client...")
 
-        auth_client = AuthClient(
-            self.completeUrl
-        )
-
-        result = auth_client.check_clients()
+        # BUG FIX: the progress callback used to be defined but never
+        # registered, so no progress was ever reported. It has to be passed to
+        # YouTube(...) through AuthClient.
+        result = AuthClient(
+            self.completeUrl,
+            on_progress=self._on_progress,
+        ).check_clients()
 
         if not result:
-            raise RuntimeError(
-                "No compatible YouTube client found."
-            )
+            raise RuntimeError("No compatible YouTube client found.")
 
-        # AuthClient devuelve:
-        # (YouTube, audio_stream, client)
-        yt, audio_stream, client = result
-
-        self.yt = yt
-        self.audio_stream = audio_stream
-        self.client = client
+        self.yt, self.audio_stream, self.client = result
 
         logger.info(
-            "Using client: %s",
-            self.client
+            "Using client %s, stream %s (%s)",
+            self.client,
+            self.audio_stream,
+            self.audio_stream.abr,
         )
 
-        logger.info(
-            "Selected audio stream: %s",
-            self.audio_stream
-        )
-
-        logger.info(
-            "Audio bitrate: %s",
-            self.audio_stream.abr
-        )
-
-    # =========================================================
+    # =========================================================================
     # Metadata
-    # =========================================================
+    # =========================================================================
 
     @classmethod
-    def clean_filename(
-        cls,
-        filename: str | None
-    ):
-
+    def clean_filename(cls, filename: str | None) -> str:
+        """Make ``filename`` safe to use as a file name."""
         if not filename:
             return "Unknown"
 
-        filename = (
-            cls.INVALID_FILENAME_RE.sub(
-                "",
-                filename
-            )
-        )
+        filename = cls.INVALID_FILENAME_RE.sub("", filename)
+        filename = cls.SPACES_RE.sub(" ", filename)
 
-        filename = (
-            cls.SPACES_RE.sub(
-                " ",
-                filename
-            )
-        )
+        return filename.strip()[:100] or "Unknown"
 
-        return filename.strip()[:100]
+    def clean_artist(self, artist: str) -> str:
+        """Remove the ' - Topic' suffix of auto-generated YouTube channels."""
+        return self.TOPIC_RE.sub(r"\1", artist)
 
-    def clean_artist(
-        self,
-        artist: str
-    ):
-
-        return self.TOPIC_RE.sub(
-            r"\1",
-            artist
-        )
-
-    def save_youtube_metadata(self):
-
+    def save_youtube_metadata(self) -> None:
         if self.yt is None:
-            raise RuntimeError(
-                "YouTube has not been initialized."
-            )
+            raise RuntimeError("YouTube has not been initialized.")
 
-        title = self.clean_filename(
-            self.yt.title
-        )
-
-        artist = self.clean_filename(
-            self.yt.author
-        )
-
+        # Tags may contain any character; only file names need sanitizing.
+        title = self.SPACES_RE.sub(" ", self.yt.title or "").strip() or "Unknown"
         artist = self.clean_artist(
-            artist
-        )
+            self.SPACES_RE.sub(" ", self.yt.author or "").strip()
+        ) or "Unknown"
 
-        self.songs_data.updateTitle(
-            title
-        )
-
-        self.songs_data.updateArtist(
-            artist
-        )
-
-        self.songs_data.updateThumbalImg(
-            getattr(
-                self.yt,
-                "thumbnail_url",
-                None
-            )
-        )
+        self.songs_data.updateTitle(title)
+        self.songs_data.updateArtist(artist)
+        self.songs_data.updateThumbalImg(getattr(self.yt, "thumbnail_url", None))
 
         logger.info(
-            "Title: %s",
-            title
+            "Title: %s | Artist: %s | Thumbnail: %s",
+            title,
+            artist,
+            self.songs_data.thumbalImg,
         )
 
-        logger.info(
-            "Artist: %s",
-            artist
-        )
-
-        logger.info(
-            "Thumbnail: %s",
-            self.songs_data.thumbalImg
-        )
-
-    # =========================================================
+    # =========================================================================
     # Download
-    # =========================================================
+    # =========================================================================
 
     def download_audio(self) -> Path:
-
+        """Download the selected stream into the temporary directory."""
         if self.audio_stream is None:
-            raise RuntimeError(
-                "Audio stream has not been selected."
-            )
+            raise RuntimeError("Audio stream has not been selected.")
 
-        self.output_dir.mkdir(
-            parents=True,
-            exist_ok=True
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
+        self._last_reported = -1
+
+        extension = (
+            "m4a" if self.audio_stream.subtype == "mp4" else self.audio_stream.subtype
         )
 
-        downloaded = (
+        downloaded = Path(
             self.audio_stream.download(
-                output_path=str(
-                    self.output_dir
-                )
+                output_path=str(self.temp_dir),
+                filename=f"{self.video_id}.{extension}",
             )
         )
 
-        downloaded_path = Path(
-            downloaded
-        )
+        if not downloaded.exists():
+            raise FileNotFoundError(f"Downloaded file does not exist: {downloaded}")
 
-        if not downloaded_path.exists():
-            raise FileNotFoundError(
-                f"Downloaded file does not exist: "
-                f"{downloaded_path}"
-            )
+        logger.info("Downloaded: %s", downloaded)
+        return downloaded
 
-        logger.info(
-            "Downloaded: %s",
-            downloaded_path
-        )
-
-        return downloaded_path
-
-    # =========================================================
+    # =========================================================================
     # FFmpeg
-    # =========================================================
+    # =========================================================================
 
     @staticmethod
-    def run_ffmpeg(
-        input_file: Path,
-        output_file: Path,
-        *args: str
-    ):
-
+    def run_ffmpeg(input_file: Path, output_file: Path, *args: str) -> None:
         command = [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(input_file),
+            "ffmpeg", "-y", "-nostdin", "-loglevel", "error",
+            "-i", str(input_file),
+            "-vn",  # audio only
             *args,
-            str(output_file)
+            str(output_file),
         ]
 
-        logger.debug(
-            "FFmpeg command: %s",
-            " ".join(command)
-        )
+        logger.debug("FFmpeg command: %s", " ".join(command))
 
-        subprocess.run(
-            command,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
+        try:
+            subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+                errors="replace",
+            )
+        except subprocess.CalledProcessError as error:
+            # The real reason used to be thrown away with DEVNULL.
+            logger.error("FFmpeg failed: %s", (error.stderr or "").strip()[-500:])
+            output_file.unlink(missing_ok=True)
+            raise
 
         if not output_file.exists():
-
-            raise FileNotFoundError(
-                f"FFmpeg did not create: "
-                f"{output_file}"
-            )
+            raise FileNotFoundError(f"FFmpeg did not create: {output_file}")
 
     def convert_to_mp3(
         self,
         input_file: Path,
+        output_file: Path,
         sample_rate: int = 44100,
-        bitrate: str = "320k"
+        bitrate: str = "320k",
     ) -> Path:
-
-        output_file = (
-            input_file.with_suffix(".mp3")
-        )
-
         self.run_ffmpeg(
-            input_file,
-            output_file,
-            "-ar",
-            str(sample_rate),
-            "-c:a",
-            "libmp3lame",
-            "-b:a",
-            bitrate
+            input_file, output_file,
+            "-ar", str(sample_rate),
+            "-c:a", "libmp3lame",
+            "-b:a", bitrate,
         )
-
         return output_file
 
-
-    def convert_to_flac(
-        self,
-        input_file: Path
-    ) -> Path:
-
-        output_file = (
-            input_file.with_suffix(".flac")
-        )
-
-        self.run_ffmpeg(
-            input_file,
-            output_file,
-            "-f",
-            "flac"
-        )
-
+    def convert_to_flac(self, input_file: Path, output_file: Path) -> Path:
+        self.run_ffmpeg(input_file, output_file, "-c:a", "flac")
         return output_file
 
-    # =========================================================
+    # =========================================================================
     # File processing
-    # =========================================================
+    # =========================================================================
 
     @staticmethod
-    def size_mb(
-        file_path: Path
-    ) -> float:
+    def size_mb(file_path: Path) -> float:
+        return file_path.stat().st_size / (1024 * 1024)
 
-        return (
-            file_path.stat().st_size
-            / (1024 * 1024)
-        )
+    def _target_path(self, suffix: str) -> Path:
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        return self.output_dir / f"{self.video_id}{suffix}"
 
-    def process_audio(
-        self,
-        audio_file: Path
-    ) -> Path:
-
-        size = self.size_mb(
-            audio_file
-        )
-
-        logger.info(
-            "Initial file size: %.2f MB",
-            size
-        )
-
-        # -----------------------------------------------------
-        # Try FLAC directly when possible
-        # -----------------------------------------------------
+    def process_audio(self, audio_file: Path) -> Path:
+        """Convert the downloaded file into its final format inside ``output_dir``."""
+        size = self.size_mb(audio_file)
+        logger.info("Initial file size: %.2f MB", size)
 
         if size < self.MAX_SIZE_MB:
 
-            flac = self.convert_to_flac(
-                audio_file
+            if self.PREFER_FLAC:
+                flac = self.convert_to_flac(audio_file, self._target_path(".flac"))
+                logger.info("FLAC size: %.2f MB", self.size_mb(flac))
+
+                if self.size_mb(flac) < self.MAX_SIZE_MB:
+                    audio_file.unlink(missing_ok=True)
+                    return flac
+
+                flac.unlink(missing_ok=True)
+
+            elif audio_file.suffix.lower() == ".m4a":
+                target = self._target_path(".m4a")
+                shutil.move(str(audio_file), str(target))
+                return target
+
+        # Fallback: MP3, lowering the bitrate until it fits.
+        for bitrate in self.MP3_BITRATES:
+            mp3 = self.convert_to_mp3(
+                audio_file, self._target_path(".mp3"), bitrate=bitrate
             )
 
-            flac_size = self.size_mb(
-                flac
-            )
+            if self.size_mb(mp3) < self.MAX_SIZE_MB:
+                audio_file.unlink(missing_ok=True)
+                return mp3
 
-            logger.info(
-                "FLAC size: %.2f MB",
-                flac_size
-            )
+            mp3.unlink(missing_ok=True)
 
-            if flac_size < self.MAX_SIZE_MB:
-
-                audio_file.unlink(
-                    missing_ok=True
-                )
-
-                return flac
-
-            flac.unlink(
-                missing_ok=True
-            )
-
-        # -----------------------------------------------------
-        # Fallback to MP3
-        # -----------------------------------------------------
-
-        mp3 = self.convert_to_mp3(
-            audio_file,
-            sample_rate=44100
+        audio_file.unlink(missing_ok=True)
+        raise AudioTooLargeError(
+            f"Audio is larger than {self.MAX_SIZE_MB} MB even at {self.MP3_BITRATES[-1]}."
         )
 
-        audio_file.unlink(
-            missing_ok=True
-        )
-
-        return mp3
-
-
-    # =========================================================
-    # Metadata
-    # =========================================================
-
-    def process_metadata(
-        self,
-        final_file: Path
-    ):
-
-        suffix = final_file.suffix.lower()
-
-        logger.info(
-        "Processing metadata: %s",
-        final_file
-    )
-
-        if suffix in (".m4a", ".mp4"):
-
-            self.songs_data.updateMetaData(
-                str(final_file)
-            )
-
-        elif suffix == ".flac":
-
-            self.songs_data.updateFlacCover(
-                str(final_file)
-            )
-
-        else:
-
-            logger.warning(
-                "No metadata processor for: %s",
-                suffix
-            )
-            
-    def get_final_duration(
-        self,
-        audio_path: Path
-    ) -> int:
+    def process_metadata(self, final_file: Path) -> None:
+        """Tag the file. A tagging failure must not lose the download."""
+        logger.info("Processing metadata: %s", final_file)
 
         try:
+            if not self.songs_data.write_tags(final_file):
+                logger.warning("No metadata processor for: %s", final_file.suffix)
+        except Exception as error:
+            logger.warning("Could not write metadata: %s", error)
 
-            audio = File(
-                str(audio_path)
-            )
+    @staticmethod
+    def audio_duration(audio_path: Path) -> int:
+        """Real duration of an audio file in seconds (0 if unknown)."""
+        try:
+            audio = MutagenFile(str(audio_path))
 
             if audio and audio.info:
+                return int(audio.info.length)
 
-                duration = int(
-                    audio.info.length
-                )
-
-                logger.info(
-                    "Final duration: %s seconds",
-                    duration
-                )
-
-                self.songs_data.duration = duration
-
-                return duration
-
-        except Exception as e:
-
-            logger.warning(
-                "Could not determine audio duration: %s",
-                e
-            )
-
-        self.songs_data.duration = 0
+        except Exception as error:
+            logger.warning("Could not determine audio duration: %s", error)
 
         return 0
 
-    # =========================================================
-    # Move
-    # =========================================================
+    def get_final_duration(self, audio_path: Path) -> int:
+        """Read the real duration from the final file and store it."""
+        self.songs_data.duration = self.audio_duration(audio_path)
+        logger.info("Final duration: %s seconds", self.songs_data.duration)
+        return self.songs_data.duration
 
-    def move_file(
-        self,
-        file_path: Path
-    ) -> Path:
+    # =========================================================================
+    # Thumbnail for Telegram
+    # =========================================================================
 
-        self.output_dir.mkdir(
-            parents=True,
-            exist_ok=True
-        )
-
-        # If the file is already inside output_dir,
-        # don't move it.
-        try:
-
-            if (
-                file_path.parent.resolve()
-                == self.output_dir.resolve()
-            ):
-
-                return file_path
-
-        except FileNotFoundError:
-            pass
-
-        destination = (
-            self.output_dir
-            / file_path.name
-        )
-
-        shutil.move(
-            str(file_path),
-            str(destination)
-        )
-
-        logger.info(
-            "Moved: %s -> %s",
-            destination
-        )
-
-        return destination
     def download_thumbnail(
         self,
         url_thumbnail: str | None,
-        video_id: str
+        video_id: str,
     ) -> Path | None:
-
-        if not url_thumbnail:
+        """Return a cached JPEG thumbnail that Telegram will accept."""
+        if not url_thumbnail or not url_thumbnail.startswith("https://"):
             return None
 
-        if not url_thumbnail.startswith(
-            "https://"
-        ):
-            return None
+        # "_tg" avoids reusing old, oversized files that Telegram ignored.
+        image_path = self.thumb_dir / f"{video_id}_tg.jpg"
 
-        try:
-
-            temp_dir = Path(
-                "thumbimg"
-            )
-
-            temp_dir.mkdir(
-                parents=True,
-                exist_ok=True
-            )
-
-            image_path = (
-                temp_dir
-                / f"{video_id}.jpg"
-            )
-
-            if image_path.exists():
-                return image_path
-
-            response = requests.get(
-                url_thumbnail,
-                timeout=20
-            )
-
-            response.raise_for_status()
-
-            image_path.write_bytes(
-                response.content
-            )
-
+        if image_path.exists():
             return image_path
 
-        except requests.RequestException as e:
+        try:
+            self.thumb_dir.mkdir(parents=True, exist_ok=True)
+            return tagsong(url_thumbnail).save_telegram_thumbnail(image_path)
 
-            logger.error(
-                "Error downloading thumbnail: %s",
-                e
-            )
-
+        except Exception as error:
+            logger.warning("Could not create Telegram thumbnail: %s", error)
             return None
 
-
-    # =========================================================
+    # =========================================================================
     # Main
-    # =========================================================
+    # =========================================================================
+
+    def _cleanup_temp(self) -> None:
+        """Remove leftovers of a failed download."""
+        if self.video_id and self.temp_dir.exists():
+            for leftover in self.temp_dir.glob(f"{self.video_id}.*"):
+                leftover.unlink(missing_ok=True)
 
     def download(self) -> Path:
-
+        """Run the whole pipeline. Blocking: run it in a worker thread."""
         try:
-
-            # -------------------------------------------------
-            # 1. URL
-            # -------------------------------------------------
-
             self.regexUrl()
             self.generateYbUrl()
 
-            # -------------------------------------------------
-            # 2. Find working client
-            # -------------------------------------------------
-
             self.initialize_youtube()
-
-            logger.info(
-                "Cliente seleccionado: %s",
-                self.client
-            )
-
-            # -------------------------------------------------
-            # 3. Download
-            # -------------------------------------------------
-
-            downloaded_file = (
-                self.download_audio()
-            )
-
-            # -------------------------------------------------
-            # 4. Save YouTube information
-            # -------------------------------------------------
-
             self.save_youtube_metadata()
 
-            # -------------------------------------------------
-            # 5. Process audio
-            # -------------------------------------------------
+            downloaded_file = self.download_audio()
+            final_file = self.process_audio(downloaded_file)
 
-            final_file = (
-                self.process_audio(
-                    downloaded_file
-                )
-            )# Read the duration from the final processed file.
-            try:
+            self.process_metadata(final_file)
+            self.get_final_duration(final_file)
 
-                from mutagen import File
-
-                audio_info = File(
-                    str(final_file)
-                )
-
-                if audio_info and audio_info.info:
-
-                    self.songs_data.duration = int(
-                        audio_info.info.length
-                    )
-
-                    logger.info(
-                        "Final audio duration: %s seconds",
-                        self.songs_data.duration
-                    )
-
-            except Exception as e:
-
-                logger.warning(
-                    "Could not read final audio duration: %s",
-                    e
-                )
-
-
-            # -------------------------------------------------
-            # 6. Process metadata
-            # -------------------------------------------------
-
-            self.process_metadata(
-                final_file
-            )
-
-            # -------------------------------------------------
-            # 7. Move final file
-            # -------------------------------------------------
-
-            final_file = self.move_file(
-                final_file
-            )
-
-            # -------------------------------------------------
-            # 8. Get REAL final duration
-            # -------------------------------------------------
-
-            self.get_final_duration(
-                final_file
-            )
-
-            logger.info(
-                "Download completed: %s",
-                final_file
-            )
-
-            logger.info(
-                "Final duration: %s seconds",
-                self.songs_data.duration
-            )
-
+            logger.info("Download completed: %s", final_file)
             return final_file
 
         except Exception:
-
-            logger.exception(
-                "Error downloading %s",
-                self.url
-            )
-
+            logger.exception("Error downloading %s", self.url)
+            self._cleanup_temp()
             raise
