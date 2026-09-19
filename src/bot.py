@@ -86,6 +86,7 @@ class SongInfo:
     duration: int
     thumbnail_url: str | None
     video_id: str
+    quality_note: str | None = None
 
 
 # =============================================================================
@@ -244,6 +245,10 @@ class StatusMessage:
             f"👤 {html.escape(song.artist)}\n"
             f"⏱ {format_duration(song.duration)}"
         )
+
+        if song.quality_note:
+            self._footer += f"\n\n<i>{html.escape(song.quality_note)}</i>"
+
         await self.refresh(force=True)
         await self.close()
 
@@ -571,7 +576,7 @@ async def _obtain_song(downloader: DownloadYB, status: StatusMessage) -> SongInf
 
         return SongInfo(
             audio_path, data.title, data.artist, data.duration,
-            data.thumbalImg, video_id,
+            data.thumbalImg, video_id, downloader.quality_note,
         )
 
 

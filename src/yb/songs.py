@@ -42,8 +42,16 @@ class DownloadYB:
     # transcoding, much faster, and it plays in Telegram's music player).
     PREFER_FLAC = True
 
-    # MP3 fallback bitrates, tried from best to smallest until the file fits.
-    MP3_BITRATES = ("320k", "192k", "128k")
+    # Valid MP3 bitrates (kbps), best quality first. When the audio is too big,
+    # the highest one that is predicted to fit under the limit is used.
+    MP3_BITRATE_LADDER = (320, 256, 192, 160, 128, 96, 64, 48, 32, 24, 16)
+
+    # Encoders overshoot the target a bit (headers, tags, cover art).
+    SIZE_SAFETY = 0.97
+
+    # At or below this bitrate the audio is encoded as mono at 22.05 kHz,
+    # which sounds much better than stereo 44.1 kHz at such low bitrates.
+    LOW_BITRATE_KBPS = 32
 
     def __init__(
         self,
@@ -70,6 +78,20 @@ class DownloadYB:
         self.audio_stream = None
 
         self.songs_data = songsData()
+
+        # Set when the audio had to be re-encoded as MP3 to fit the size limit.
+        self.mp3_bitrate_kbps: int | None = None
+
+    @property
+    def quality_note(self) -> str | None:
+        """Human readable note when the quality was reduced (else ``None``)."""
+        if self.mp3_bitrate_kbps is None:
+            return None
+
+        return (
+            f"🔉 Converted to MP3 {self.mp3_bitrate_kbps} kbps "
+            "to fit Telegram's 50 MB limit"
+        )
 
     # =========================================================================
     # URL
@@ -252,16 +274,43 @@ class DownloadYB:
         self,
         input_file: Path,
         output_file: Path,
-        sample_rate: int = 44100,
-        bitrate: str = "320k",
+        bitrate_kbps: int = 320,
     ) -> Path:
+        if bitrate_kbps <= self.LOW_BITRATE_KBPS:
+            audio_args = ("-ac", "1", "-ar", "22050")
+        else:
+            audio_args = ("-ar", "44100")
+
         self.run_ffmpeg(
             input_file, output_file,
-            "-ar", str(sample_rate),
+            *audio_args,
             "-c:a", "libmp3lame",
-            "-b:a", bitrate,
+            "-b:a", f"{bitrate_kbps}k",
         )
         return output_file
+
+    def _plan_mp3_bitrates(self, duration: int) -> list[int]:
+        """Bitrates worth trying, best first, for audio of ``duration`` seconds.
+
+        Size of a constant-bitrate file = bitrate * duration, so every bitrate
+        that cannot fit is skipped without wasting an encode. If the duration
+        is unknown, the whole ladder is tried in order.
+        """
+        if duration <= 0:
+            return list(self.MP3_BITRATE_LADDER)
+
+        limit_bits = self.MAX_SIZE_MB * 1024 * 1024 * 8 * self.SIZE_SAFETY
+        max_kbps = limit_bits / duration / 1000
+
+        plan = [b for b in self.MP3_BITRATE_LADDER if b <= max_kbps]
+
+        if not plan:
+            raise AudioTooLargeError(
+                f"{duration // 60} minutes of audio cannot fit in "
+                f"{self.MAX_SIZE_MB} MB even at {self.MP3_BITRATE_LADDER[-1]} kbps."
+            )
+
+        return plan
 
     def convert_to_flac(self, input_file: Path, output_file: Path) -> Path:
         self.run_ffmpeg(input_file, output_file, "-c:a", "flac")
@@ -301,21 +350,27 @@ class DownloadYB:
                 shutil.move(str(audio_file), str(target))
                 return target
 
-        # Fallback: MP3, lowering the bitrate until it fits.
-        for bitrate in self.MP3_BITRATES:
+        # Fallback: MP3 with the best bitrate that fits under the limit.
+        duration = int(getattr(self.yt, "length", 0) or 0) or self.audio_duration(
+            audio_file
+        )
+
+        for bitrate in self._plan_mp3_bitrates(duration):
             mp3 = self.convert_to_mp3(
-                audio_file, self._target_path(".mp3"), bitrate=bitrate
+                audio_file, self._target_path(".mp3"), bitrate_kbps=bitrate
             )
 
             if self.size_mb(mp3) < self.MAX_SIZE_MB:
                 audio_file.unlink(missing_ok=True)
+                self.mp3_bitrate_kbps = bitrate
+                logger.info("MP3 %s kbps: %.2f MB", bitrate, self.size_mb(mp3))
                 return mp3
 
             mp3.unlink(missing_ok=True)
 
         audio_file.unlink(missing_ok=True)
         raise AudioTooLargeError(
-            f"Audio is larger than {self.MAX_SIZE_MB} MB even at {self.MP3_BITRATES[-1]}."
+            f"Audio is larger than {self.MAX_SIZE_MB} MB even at the lowest bitrate."
         )
 
     def process_metadata(self, final_file: Path) -> None:
