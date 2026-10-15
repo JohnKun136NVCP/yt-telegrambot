@@ -1,4 +1,13 @@
-"""Telegram bot: downloads YouTube audio and sends it with live progress."""
+"""Telegram bot: downloads YouTube audio and sends it with live progress.
+
+Request flow, in order: flood control -> link validation -> daily quota ->
+tier lookup (free/premium -> size cap) -> bounded job queue -> download ->
+upload (with a local-server fast path for premium-sized files) -> metadata.
+See src/config.py, src/security.py, src/job_queue.py and src/payments.py for
+the pieces this module wires together.
+"""
+
+from __future__ import annotations
 
 import asyncio
 import html
@@ -10,6 +19,7 @@ from collections import defaultdict
 from contextlib import closing, suppress
 from dataclasses import dataclass
 from datetime import time as dtime
+from functools import wraps
 from pathlib import Path
 
 import httpx
@@ -24,17 +34,23 @@ from telegram.error import (
 )
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    PreCheckoutQueryHandler,
     filters,
 )
 from telegram.warnings import PTBDeprecationWarning
 
 from database.databases import usrdatabase, ytdatabase
-from src import messages
+from src import messages, payments
+from src.config import ConfigError, get_config
+from src.job_queue import JobQueue, JobRecord, QueueFullError
+from src.logging_utils import get_file_logger
 from src.messages import Quotes
-from src.uploader import UploadError, send_audio_with_progress
+from src.security import FloodControl, is_youtube_url
+from src.uploader import UploadError, close_client, send_audio_with_progress
 from src.yb.songs import AudioTooLargeError, DownloadYB
 
 # =============================================================================
@@ -59,13 +75,20 @@ for _noisy in ("httpx", "httpcore", "telegram", "telegram.ext"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+queue_logger = get_file_logger("src.job_queue", "queue.log")
 
 # =============================================================================
 # Constants
 # =============================================================================
 
 SONGS_DIR = Path("Songs")
-SUPPORTED_FORMATS = (".m4a", ".mp3", ".flac")
+QUEUE_DB_PATH = "database/queue.db"
+
+# Checked in this order: best quality first, so a premium-quality cache hit
+# (.flac/.m4a) is always preferred over a leftover quality-reduced .mp3 from
+# an earlier free-tier download of the same video.
+SUPPORTED_FORMATS = (".flac", ".m4a", ".mp3")
+
 SUBSCRIBE_IMAGE = Path("img/photo_2.png")
 USERS_DB_PATH = "database/users.db"
 
@@ -74,6 +97,19 @@ DAILY_QUOTE_TIME = dtime(hour=18, minute=0, second=0)
 
 # Never download the same video twice at the same time.
 _video_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+# Per-user cooldown between link submissions (not persisted -- see
+# src/security.py's FloodControl docstring for why that's fine here).
+_flood_control: FloodControl | None = None
+
+
+def get_flood_control() -> FloodControl:
+    global _flood_control
+
+    if _flood_control is None:
+        _flood_control = FloodControl(get_config().min_seconds_between_requests)
+
+    return _flood_control
 
 
 @dataclass
@@ -117,8 +153,15 @@ def _retry_seconds(error: RetryAfter) -> float:
 
 
 def _register_user_sync(user_id: int, username: str) -> None:
+    config = get_config()
+
     with closing(usrdatabase()) as user_db:
         user_db.add_user(user_id, username, 0, False, "unsubscribed")
+
+        # Bot-operator ids (ADMIN_IDS in .env) always have admin status,
+        # restored automatically even if the users.db file is ever replaced.
+        if user_id in config.admin_ids:
+            user_db.ensure_admin(user_id)
 
 
 async def register_user(user) -> None:
@@ -127,6 +170,17 @@ async def register_user(user) -> None:
         await asyncio.to_thread(_register_user_sync, user.id, _display_name(user))
     except sqlite3.Error:
         logger.exception("Database error while registering user %s", user.id)
+
+
+def _tier_sync(user_id: int) -> tuple[bool, float]:
+    """Return ``(unlimited, max_size_mb)`` for a user, off the event loop."""
+    config = get_config()
+
+    with closing(usrdatabase()) as db:
+        unlimited = db.is_unlimited(user_id)
+
+    max_size_mb = config.effective_premium_max_mb() if unlimited else config.standard_max_mb
+    return unlimited, max_size_mb
 
 
 def find_audio_file(video_id: str, legacy_title: str | None = None) -> Path | None:
@@ -154,6 +208,41 @@ def find_audio_file(video_id: str, legacy_title: str | None = None) -> Path | No
             return path
 
     return None
+
+
+def _cached_file_is_reusable(audio_path: Path, max_size_mb: float, unlimited: bool) -> bool:
+    """Whether a previously-downloaded file is good enough for THIS request.
+
+    Two ways a cache hit is rejected (the file is kept on disk either way --
+    only a fresh file is produced alongside it):
+      - It is bigger than this requester's cap (a premium user's FLAC/M4A
+        would fail to upload for a standard-tier requester).
+      - The requester is unlimited-tier but the cached file is an ``.mp3``
+        (meaning some earlier, size-constrained request had to shrink it) --
+        such a requester is entitled to the original, un-reduced quality.
+    """
+    size_mb = DownloadYB.size_mb(audio_path)
+
+    if size_mb > max_size_mb:
+        return False
+
+    if unlimited and max_size_mb > DownloadYB.MAX_SIZE_MB and audio_path.suffix.lower() == ".mp3":
+        return False
+
+    return True
+
+
+def _cleanup_other_versions(video_id: str, keep: Path) -> None:
+    """Remove other cached files for ``video_id`` once a new one replaces them."""
+    for suffix in SUPPORTED_FORMATS:
+        if suffix == keep.suffix.lower():
+            continue
+
+        stale = SONGS_DIR / f"{video_id}{suffix}"
+
+        if stale.exists() and stale != keep:
+            stale.unlink(missing_ok=True)
+            logger.info("Removed superseded cache file: %s", stale)
 
 
 # =============================================================================
@@ -188,10 +277,15 @@ class StatusMessage:
 
     MIN_EDIT_INTERVAL = 1.5
 
-    def __init__(self) -> None:
+    def __init__(self, queued: bool = False) -> None:
         self._message: Message | None = None
         self._title = "🎧 <b>Processing your request</b>"
-        self._steps = {"download": _ACTIVE, "process": _PENDING, "upload": _PENDING}
+        self._queued = queued
+        self._steps = {
+            "download": _PENDING if queued else _ACTIVE,
+            "process": _PENDING,
+            "upload": _PENDING,
+        }
         self._download_pct = 0.0
         self._upload_pct = 0.0
         self._footer = ""
@@ -203,9 +297,9 @@ class StatusMessage:
         self._pump_task: asyncio.Task | None = None
 
     @classmethod
-    async def create(cls, source: Message) -> "StatusMessage":
+    async def create(cls, source: Message, queued: bool = False) -> "StatusMessage":
         """Reply to ``source`` with the initial status and start updating it."""
-        status = cls()
+        status = cls(queued=queued)
         text = status._render()
 
         status._message = await source.reply_text(text, parse_mode=ParseMode.HTML)
@@ -226,8 +320,16 @@ class StatusMessage:
     def set_upload_progress(self, percentage: float) -> None:
         self._upload_pct = float(percentage)
 
+    def mark_dequeued(self) -> None:
+        """A worker has picked this job up: stop showing "waiting in queue"."""
+        self._queued = False
+
+        if self._steps["download"] == _PENDING:
+            self._steps["download"] = _ACTIVE
+
     def mark_cached(self) -> None:
         """The song was already downloaded: skip straight to processing."""
+        self._queued = False
         self._download_pct = 100.0
         self._steps.update(download=_DONE, process=_ACTIVE)
 
@@ -253,6 +355,8 @@ class StatusMessage:
         await self.close()
 
     async def fail(self, note: str) -> None:
+        self._queued = False
+
         for key, state in self._steps.items():
             if state == _ACTIVE:
                 self._steps[key] = _FAILED
@@ -290,7 +394,12 @@ class StatusMessage:
 
     def _render(self) -> str:
         lines = [self._title, ""]
-        lines += self._step_lines("download", "Downloading audio", self._download_pct)
+
+        if self._queued:
+            lines.append("🕒 Waiting in queue…")
+        else:
+            lines += self._step_lines("download", "Downloading audio", self._download_pct)
+
         lines += self._step_lines("process", "Processing & optimizing", None)
         lines += self._step_lines("upload", "Uploading to Telegram", self._upload_pct)
 
@@ -396,6 +505,11 @@ def _delete_user(user_id: int) -> None:
             conn.execute("DELETE FROM users WHERE telegram_id = ?", (user_id,))
 
 
+def _expire_premium_sync() -> int:
+    with closing(usrdatabase()) as db:
+        return db.expire_old_premium()
+
+
 async def _send_html(bot, chat_id: int, text: str) -> None:
     """Send an HTML message, retrying once if Telegram asks us to slow down."""
     try:
@@ -409,6 +523,11 @@ async def _send_html(bot, chat_id: int, text: str) -> None:
 async def send_daily_quote(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send the quote of the day to non-premium users."""
     try:
+        expired = await asyncio.to_thread(_expire_premium_sync)
+
+        if expired:
+            logger.info("Expired premium for %d user(s) before the daily broadcast.", expired)
+
         user_ids = await asyncio.to_thread(_fetch_free_user_ids)
 
         if not user_ids:
@@ -466,7 +585,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await register_user(update.effective_user)
     await update.effective_message.reply_text(
-        messages.HELP_TEXT, parse_mode=ParseMode.HTML
+        messages.HELP_TEXT,
+        parse_mode=ParseMode.HTML,
+        link_preview_options=messages.NO_PREVIEW,
     )
 
 
@@ -491,16 +612,183 @@ async def yourid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
 
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the sender's own tier, quota and upload-size cap."""
+    user = update.effective_user
+    await register_user(user)
+
+    config = get_config()
+
+    def _fetch():
+        with closing(usrdatabase()) as db:
+            return db.get_user(user.id)
+
+    info = await asyncio.to_thread(_fetch)
+
+    if info is None:
+        await update.effective_message.reply_text("Send /start first.")
+        return
+
+    max_mb = config.effective_premium_max_mb() if info["unlimited"] else config.standard_max_mb
+
+    lines = [
+        "👤 <b>Your status</b>",
+        "",
+        f"Tier: <b>{html.escape(info['type_user'])}</b>",
+    ]
+
+    if info["unlimited"]:
+        expiry = (
+            f" (until {payments.format_date(info['premium_until'])})"
+            if info["premium_until"]
+            else " (no expiry)"
+        )
+        lines.append(f"Downloads: unlimited{expiry}")
+    else:
+        lines.append(
+            f"Downloads today: {info['songs_by_day']}/{usrdatabase.FREE_USER_DAILY_LIMIT}"
+        )
+
+    lines.append(f"Max file size: {max_mb:.0f} MB")
+    lines.append("")
+    lines.append("Use /premium to upgrade.")
+
+    await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
 async def set_bot_commands(application: Application) -> None:
     await application.bot.set_my_commands(
         [
             BotCommand("start", "Start interaction with the bot"),
             BotCommand("help", "Get help on how to use the bot"),
-            BotCommand("subscribe", "Subscribe to premium features and info"),
+            BotCommand("premium", "Unlock unlimited downloads with Telegram Stars"),
+            BotCommand("status", "Show your tier and daily quota"),
+            BotCommand("subscribe", "Other ways to support the project"),
             BotCommand("myid", "Show your Telegram user ID"),
         ]
     )
     await application.bot.set_chat_menu_button()
+
+
+# =============================================================================
+# Admin commands
+# =============================================================================
+
+def admin_only(handler):
+    """Decorator: refuse to run ``handler`` unless the sender is an admin."""
+
+    @wraps(handler)
+    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user = update.effective_user
+        config = get_config()
+
+        if user is None or user.id not in config.admin_ids:
+            await update.effective_message.reply_text("⛔ This command is for admins only.")
+            return
+
+        await handler(update, context)
+
+    return wrapped
+
+
+@admin_only
+async def grant_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """``/grant <telegram_id> <admin|premium|subscribed> [days]``."""
+    args = context.args or []
+
+    if len(args) < 2 or not args[0].lstrip("-").isdigit():
+        await update.effective_message.reply_text(
+            "Usage: /grant <telegram_id> <admin|premium|subscribed> [days]\n"
+            "Omit [days] for no expiry."
+        )
+        return
+
+    target_id = int(args[0])
+    type_user = args[1].lower()
+
+    if type_user not in {"admin", "premium", "subscribed"}:
+        await update.effective_message.reply_text(
+            "Type must be one of: admin, premium, subscribed."
+        )
+        return
+
+    days: int | None = None
+
+    if len(args) >= 3:
+        if not args[2].isdigit() or int(args[2]) <= 0:
+            await update.effective_message.reply_text("[days] must be a positive integer.")
+            return
+        days = int(args[2])
+
+    def _apply() -> dict | None:
+        with closing(usrdatabase()) as db:
+            db.add_user(target_id, f"id:{target_id}")
+
+            if type_user == "admin":
+                db.ensure_admin(target_id)
+            else:
+                db.set_premium(target_id, type_user, days=days)
+
+            return db.get_user(target_id)
+
+    info = await asyncio.to_thread(_apply)
+    expiry = payments.format_date(info["premium_until"]) if info else "unknown"
+
+    await update.effective_message.reply_text(
+        f"✅ User <code>{target_id}</code> is now <b>{info['type_user']}</b> "
+        f"(until {expiry}).",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@admin_only
+async def revoke_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """``/revoke <telegram_id>`` -- downgrade a user to the free tier."""
+    args = context.args or []
+
+    if not args or not args[0].lstrip("-").isdigit():
+        await update.effective_message.reply_text("Usage: /revoke <telegram_id>")
+        return
+
+    target_id = int(args[0])
+
+    def _apply() -> bool:
+        with closing(usrdatabase()) as db:
+            return db.revoke_premium(target_id)
+
+    ok = await asyncio.to_thread(_apply)
+
+    await update.effective_message.reply_text(
+        f"✅ User {target_id} downgraded to the free tier."
+        if ok else f"User {target_id} was not found."
+    )
+
+
+@admin_only
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    def _apply() -> dict:
+        with closing(usrdatabase()) as db:
+            return db.stats()
+
+    stats = await asyncio.to_thread(_apply)
+    config = get_config()
+    job_queue: JobQueue | None = context.bot_data.get("job_queue")
+    waiting = job_queue.waiting if job_queue else "?"
+
+    text = (
+        "📊 <b>Bot stats</b>\n\n"
+        f"Users: {stats['total_users']} "
+        f"(admins: {stats['admins']}, premium/subscribed: {stats['premium_flagged']})\n"
+        f"Free downloads today (bot-wide): {stats['free_downloads_today']}/"
+        f"{usrdatabase.GLOBAL_FREE_DAILY_LIMIT}\n"
+        f"Stars payments: {stats['payment_count']} ({stats['stars_total']} ⭐ total)\n"
+        f"Queue: {waiting}/{config.queue_max_size} waiting, {config.queue_workers} worker(s)\n"
+        f"Upload caps: {config.standard_max_mb:.0f} MB standard / "
+        f"{config.effective_premium_max_mb():.0f} MB premium "
+        f"({'local server' if config.uses_local_server else 'cloud API, no local server configured'})"
+    )
+
+    await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
 # =============================================================================
@@ -532,7 +820,9 @@ async def _check_quota(message: Message, user, username: str) -> bool:
         return False
 
 
-async def _obtain_song(downloader: DownloadYB, status: StatusMessage) -> SongInfo:
+async def _obtain_song(
+    downloader: DownloadYB, status: StatusMessage, unlimited: bool
+) -> SongInfo:
     """Return the song from the cache, or download it if needed."""
     video_id = downloader.video_id
 
@@ -549,6 +839,16 @@ async def _obtain_song(downloader: DownloadYB, status: StatusMessage) -> SongInf
         audio_path = find_audio_file(
             video_id, legacy_title=record[1] if record else None
         )
+
+        if audio_path is not None and not _cached_file_is_reusable(
+            audio_path, downloader.max_size_mb, unlimited
+        ):
+            logger.info(
+                "Cache hit for %s rejected for this tier (size/quality mismatch), "
+                "re-downloading.",
+                video_id,
+            )
+            audio_path = None
 
         # -- Cached: no download needed -------------------------------------
         if audio_path is not None and record is not None:
@@ -567,6 +867,7 @@ async def _obtain_song(downloader: DownloadYB, status: StatusMessage) -> SongInf
         # -- Download (runs in a worker thread so the bot stays responsive) --
         downloader.progress_callback = status.set_download_progress
         audio_path = await asyncio.to_thread(downloader.download)
+        await asyncio.to_thread(_cleanup_other_versions, video_id, audio_path)
         data = downloader.songs_data
 
         if record is None:
@@ -580,39 +881,22 @@ async def _obtain_song(downloader: DownloadYB, status: StatusMessage) -> SongInf
         )
 
 
-async def download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    user = update.effective_user
-
-    if message is None or user is None or not message.text:
-        return
-
-    url = message.text.strip()
-    username = _display_name(user)
-
-    await register_user(user)
-
-    # -- Validate the link before doing any work ------------------------------
-    downloader = DownloadYB(url, output_dir=SONGS_DIR)
+async def _run_download(
+    downloader: DownloadYB,
+    status: StatusMessage,
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    user_id: int,
+    unlimited: bool,
+    max_size_mb: float,
+) -> None:
+    """The actual work for one request. Runs inside a job-queue worker."""
+    config = get_config()
+    url = downloader.url
 
     try:
-        video_id = downloader.regexUrl()
-        downloader.generateYbUrl()
-    except ValueError:
-        await message.reply_text(
-            "🔗 That doesn't look like a YouTube link.\n"
-            "Send me a valid one and I'll get the audio for you."
-        )
-        return
-
-    if not await _check_quota(message, user, username):
-        return
-
-    status = await StatusMessage.create(message)
-
-    try:
-        async with _video_locks[video_id]:
-            song = await _obtain_song(downloader, status)
+        async with _video_locks[downloader.video_id]:
+            song = await _obtain_song(downloader, status, unlimited)
 
         thumbnail = await asyncio.to_thread(
             downloader.download_thumbnail, song.thumbnail_url, song.video_id
@@ -624,7 +908,7 @@ async def download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         await send_audio_with_progress(
             context.bot,
-            update.effective_chat.id,
+            chat_id,
             song.path,
             title=song.title,
             performer=song.artist,
@@ -636,15 +920,16 @@ async def download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             caption="🎵 Downloaded from YouTube\n🤖 @songytbbot",
             thumbnail=thumbnail,
             on_progress=status.set_upload_progress,
+            max_size_mb=max_size_mb,
+            local_file_mode=config.bot_api_local_mode,
         )
 
-        with closing(usrdatabase()) as user_db:
-            user_db.request_song(user.id)
+        await asyncio.to_thread(lambda: usrdatabase().request_song(user_id))
 
         await status.finish(song)
 
     except AudioTooLargeError:
-        await status.fail("📦 This audio is too large for Telegram's 50 MB limit.")
+        await status.fail(f"📦 This audio is too large for the {max_size_mb:.0f} MB limit.")
 
     except UploadError as error:
         logger.error("Telegram rejected the upload of %s: %s", url, error)
@@ -662,28 +947,198 @@ async def download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await status.close()
 
 
+async def download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    user = update.effective_user
+
+    if message is None or user is None or not message.text:
+        return
+
+    url = message.text.strip()
+    username = _display_name(user)
+    config = get_config()
+
+    await register_user(user)
+
+    # -- Flood control (skip for admins: trusted operators) -------------------
+    if user.id not in config.admin_ids:
+        wait = get_flood_control().check(user.id)
+
+        if wait > 0:
+            await message.reply_text(
+                f"⏳ Please wait {max(1, round(wait))}s before sending another link."
+            )
+            return
+
+    # -- Security: only ever act on genuine YouTube links ----------------------
+    if not is_youtube_url(url):
+        await message.reply_text(
+            "🔗 That doesn't look like a YouTube link.\n"
+            "Send me a valid one and I'll get the audio for you."
+        )
+        return
+
+    downloader = DownloadYB(url, output_dir=SONGS_DIR)
+
+    try:
+        downloader.regexUrl()
+        downloader.generateYbUrl()
+    except ValueError:
+        await message.reply_text(
+            "🔗 That doesn't look like a YouTube link.\n"
+            "Send me a valid one and I'll get the audio for you."
+        )
+        return
+
+    if not await _check_quota(message, user, username):
+        return
+
+    unlimited, max_size_mb = await asyncio.to_thread(_tier_sync, user.id)
+    downloader.set_size_limit(max_size_mb)
+
+    job_queue: JobQueue = context.bot_data["job_queue"]
+    status = await StatusMessage.create(message, queued=job_queue.waiting > 0)
+
+    async def handler(_payload: str) -> None:
+        await _run_download(
+            downloader, status, context,
+            update.effective_chat.id, user.id, unlimited, max_size_mb,
+        )
+
+    async def on_start(_job: JobRecord) -> None:
+        status.mark_dequeued()
+        await status.refresh(force=True)
+
+    try:
+        await job_queue.submit(
+            chat_id=update.effective_chat.id,
+            user_id=user.id,
+            payload=url,
+            handler=handler,
+            on_start=on_start,
+        )
+    except QueueFullError as error:
+        await status.fail(f"🚦 {error}")
+
+
+# =============================================================================
+# Startup / shutdown
+# =============================================================================
+
+async def post_init(application: Application) -> None:
+    await set_bot_commands(application)
+
+    config = get_config()
+
+    job_queue = JobQueue(
+        db_path=QUEUE_DB_PATH,
+        max_size=config.queue_max_size,
+        workers=config.queue_workers,
+        job_timeout_seconds=config.job_timeout_seconds,
+    )
+    application.bot_data["job_queue"] = job_queue
+
+    async def notify_stale_job(job: JobRecord) -> None:
+        """Told about a job orphaned by an unclean shutdown: tell its chat."""
+        try:
+            await application.bot.send_message(
+                chat_id=job.chat_id,
+                text=(
+                    "⚠️ The bot restarted while handling your request "
+                    "(the server may have lost power or been redeployed).\n\n"
+                    "Nothing is stuck -- please just send the link again."
+                ),
+            )
+        except TelegramError as error:
+            logger.warning(
+                "Could not notify chat %s about a stale job: %s", job.chat_id, error
+            )
+
+    recovered = await job_queue.recover_stale_jobs(notify_stale_job)
+
+    if recovered:
+        logger.warning(
+            "Startup recovery: notified %d chat(s) about jobs lost in the "
+            "previous run instead of resuming them.",
+            recovered,
+        )
+
+    job_queue.start()
+    logger.info(
+        "Bot ready. Standard cap %.0f MB, premium cap %.0f MB (%s).",
+        config.standard_max_mb,
+        config.effective_premium_max_mb(),
+        "local Bot API server" if config.uses_local_server else "cloud API only",
+    )
+
+
+async def post_shutdown(application: Application) -> None:
+    job_queue: JobQueue | None = application.bot_data.get("job_queue")
+
+    if job_queue is not None:
+        await job_queue.stop()
+        job_queue.close()
+
+    await close_client()
+
+
 # =============================================================================
 # Entry point
 # =============================================================================
 
-def main(TELEGRAM_TOKEN):
+def main() -> None:
     try:
-        application = (
+        config = get_config()
+    except ConfigError as error:
+        logger.error("Configuration error: %s", error)
+        raise SystemExit(f"Configuration error: {error}") from error
+
+    try:
+        builder = (
             Application.builder()
-            .token(str(TELEGRAM_TOKEN))
-            .post_init(set_bot_commands)
+            .token(config.token)
+            .post_init(post_init)
+            .post_shutdown(post_shutdown)
             # Without this, one long download blocks every other user.
             .concurrent_updates(True)
             .read_timeout(40)
             .write_timeout(180)
             .connect_timeout(600)
-            .build()
         )
+
+        if config.uses_local_server:
+            builder = (
+                builder
+                .base_url(config.bot_api_base_url)
+                .base_file_url(config.bot_api_base_file_url)
+                .local_mode(config.bot_api_local_mode)
+            )
+            logger.info("Using local Bot API server at %s", config.bot_api_base_url)
+
+        application = builder.build()
 
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("subscribe", subscribe_command))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("myid", yourid_command))
+        application.add_handler(CommandHandler("status", status_command))
+
+        # -- Payments (Telegram Stars) ----------------------------------------
+        application.add_handler(CommandHandler("premium", payments.premium_command))
+        application.add_handler(
+            CallbackQueryHandler(payments.buy_plan_callback, pattern=r"^buy:")
+        )
+        application.add_handler(PreCheckoutQueryHandler(payments.precheckout_callback))
+        application.add_handler(
+            MessageHandler(filters.SUCCESSFUL_PAYMENT, payments.successful_payment_callback)
+        )
+
+        # -- Admin ---------------------------------------------------------------
+        application.add_handler(CommandHandler("grant", grant_command))
+        application.add_handler(CommandHandler("revoke", revoke_command))
+        application.add_handler(CommandHandler("stats", stats_command))
+        application.add_handler(CommandHandler("refund", admin_only(payments.refund_command)))
+
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download))
         application.add_error_handler(error_handler)
 

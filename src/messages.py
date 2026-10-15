@@ -11,10 +11,17 @@ from dataclasses import dataclass
 from datetime import date
 
 import requests
+from telegram import LinkPreviewOptions
 
 from src.logging_utils import get_file_logger
 
 logger = get_file_logger(__name__, "quotes.log")
+
+# Several of this bot's HTML messages contain a raw URL (a YouTube example
+# link, donation links, ...); Telegram would otherwise render an unwanted
+# link-preview card under them. ``LinkPreviewOptions`` is itself a newer Bot
+# API field (7.0+) that replaced the old boolean ``disable_web_page_preview``.
+NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 
 # =============================================================================
@@ -136,20 +143,22 @@ HELP_TEXT = (
 
 SUBSCRIBE_CAPTION = (
     "🎧 <b>Unlock Full Access — Support the Project</b>\n\n"
+    "⭐ <b>Fastest way:</b> use /premium to pay with Telegram Stars, "
+    "right here in the app -- unlocked automatically, no waiting.\n\n"
     "🚀 <i>Unlimited downloads (if YouTube allows it)</i>\n"
     "⏳ <i>No time restrictions</i>\n\n"
     "🆓 <b>Free version limits</b>\n"
     "⛔ Max <b>1 song per day</b>\n"
     "📜 Daily quotes included, but limited\n\n"
-    "💬 <b>Why support?</b>\n"
+    "💬 <b>Prefer another way to support?</b>\n"
     "This project is <b>free</b>, clean and safe: no malicious scripts, "
     "no viruses. Because of <b>YouTube's new policies</b> it is getting "
     "harder to maintain. Your support helps me fix bugs and keep it running 💪\n\n"
-    "💖 <b>How to support me</b>\n"
+    "💖 <b>Other ways to support me</b>\n"
     '☕ <a href="https://buymeacoffee.com/johnkun29">Buy Me a Coffee</a>\n'
     '🧡 <a href="https://ko-fi.com/johnkun136nvcp">Ko-fi</a>\n'
     '💻 <a href="https://github.com/sponsors/JohnKun136NVCP">GitHub Sponsors</a>\n\n'
-    "📲 <b>How to unlock full access</b>\n"
+    "📲 <b>Unlocking full access this way</b>\n"
     "1. Support me on any platform above\n"
     "2. Use /myid to get your Telegram user ID\n"
     "3. Send me your ID and proof of support via /help\n\n"
