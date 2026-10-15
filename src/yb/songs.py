@@ -9,6 +9,7 @@ from typing import Callable
 from mutagen import File as MutagenFile
 
 from src.logging_utils import get_file_logger
+from src.security import is_allowed_thumbnail_url
 from src.yb.authClients import AuthClient
 from src.yb.meta import songsData, tagsong
 
@@ -16,7 +17,7 @@ logger = get_file_logger(__name__, "songs.log")
 
 
 class AudioTooLargeError(Exception):
-    """The audio cannot fit in Telegram's 50 MB upload limit."""
+    """The audio cannot fit under this request's configured size limit."""
 
 
 class DownloadYB:
@@ -35,12 +36,24 @@ class DownloadYB:
     SPACES_RE = re.compile(r"\s+")
     TOPIC_RE = re.compile(r"^(.*) - Topic$")
 
-    # Telegram bots can upload up to 50 MB.
+    # Default size cap, used when the caller doesn't ask for a different one.
+    # Telegram's cloud Bot API caps uploads at 50 MB for every bot, free or
+    # premium user alike; src/bot.py passes a larger value here for
+    # unlimited-tier users ONLY when a local Bot API server is configured
+    # (see src/config.py's ``effective_premium_max_mb``), since that is the
+    # only way a bot can physically deliver more than 50 MB.
     MAX_SIZE_MB = 49.9
 
     # True: convert to FLAC when it fits. False: keep the original M4A (no
     # transcoding, much faster, and it plays in Telegram's music player).
+    # Auto-disabled above FLAC_AUTO_THRESHOLD_MB -- see __init__.
     PREFER_FLAC = True
+
+    # Above this cap, re-encoding a lossy YouTube source to "lossless" FLAC
+    # adds no quality and only wastes time/bandwidth/storage, so prefer_flac
+    # is auto-disabled when max_size_mb exceeds it (premium/local-server
+    # tier): the original, already-compact audio stream is kept as-is.
+    FLAC_AUTO_THRESHOLD_MB = 100.0
 
     # Valid MP3 bitrates (kbps), best quality first. When the audio is too big,
     # the highest one that is predicted to fit under the limit is used.
@@ -59,11 +72,20 @@ class DownloadYB:
         output_dir: str | Path = "Songs",
         temp_dir: str | Path = "tmp_downloads",
         thumb_dir: str | Path = "thumbimg",
+        max_size_mb: float | None = None,
+        prefer_flac: bool | None = None,
     ):
         self.url = url
         self.output_dir = Path(output_dir)
         self.temp_dir = Path(temp_dir)
         self.thumb_dir = Path(thumb_dir)
+
+        self.max_size_mb = self.MAX_SIZE_MB
+        self.prefer_flac = self.PREFER_FLAC
+        self.set_size_limit(
+            max_size_mb if max_size_mb else self.MAX_SIZE_MB,
+            prefer_flac=prefer_flac,
+        )
 
         # Receives the download percentage (0-100). It is called from the
         # worker thread that runs ``download()``.
@@ -90,8 +112,28 @@ class DownloadYB:
 
         return (
             f"🔉 Converted to MP3 {self.mp3_bitrate_kbps} kbps "
-            "to fit Telegram's 50 MB limit"
+            f"to fit the {self.max_size_mb:.0f} MB limit for this request"
         )
+
+    # =========================================================================
+    # Size tier
+    # =========================================================================
+
+    def set_size_limit(self, max_size_mb: float, prefer_flac: bool | None = None) -> None:
+        """(Re)configure the upload-size cap.
+
+        Exists so a caller can validate the URL first (cheap, no tier lookup
+        needed) and only look up the requesting user's tier afterwards,
+        without constructing a second ``DownloadYB``.
+        """
+        self.max_size_mb = float(max_size_mb)
+
+        if prefer_flac is None:
+            self.prefer_flac = (
+                self.PREFER_FLAC and self.max_size_mb <= self.FLAC_AUTO_THRESHOLD_MB
+            )
+        else:
+            self.prefer_flac = prefer_flac
 
     # =========================================================================
     # URL
@@ -241,8 +283,14 @@ class DownloadYB:
     # FFmpeg
     # =========================================================================
 
-    @staticmethod
-    def run_ffmpeg(input_file: Path, output_file: Path, *args: str) -> None:
+    # Hard ceiling on a single ffmpeg run. Protects a queue worker (and the
+    # thread it runs in) from hanging forever on a corrupt download or a
+    # runaway encode -- part of the "don't oversaturate resources" design,
+    # same spirit as the queue's own job timeout.
+    FFMPEG_TIMEOUT_SECONDS = 1800
+
+    @classmethod
+    def run_ffmpeg(cls, input_file: Path, output_file: Path, *args: str) -> None:
         command = [
             "ffmpeg", "-y", "-nostdin", "-loglevel", "error",
             "-i", str(input_file),
@@ -260,7 +308,14 @@ class DownloadYB:
                 capture_output=True,
                 text=True,
                 errors="replace",
+                timeout=cls.FFMPEG_TIMEOUT_SECONDS,
             )
+        except subprocess.TimeoutExpired:
+            logger.error(
+                "FFmpeg timed out after %ss: %s", cls.FFMPEG_TIMEOUT_SECONDS, input_file
+            )
+            output_file.unlink(missing_ok=True)
+            raise
         except subprocess.CalledProcessError as error:
             # The real reason used to be thrown away with DEVNULL.
             logger.error("FFmpeg failed: %s", (error.stderr or "").strip()[-500:])
@@ -299,7 +354,7 @@ class DownloadYB:
         if duration <= 0:
             return list(self.MP3_BITRATE_LADDER)
 
-        limit_bits = self.MAX_SIZE_MB * 1024 * 1024 * 8 * self.SIZE_SAFETY
+        limit_bits = self.max_size_mb * 1024 * 1024 * 8 * self.SIZE_SAFETY
         max_kbps = limit_bits / duration / 1000
 
         plan = [b for b in self.MP3_BITRATE_LADDER if b <= max_kbps]
@@ -307,7 +362,7 @@ class DownloadYB:
         if not plan:
             raise AudioTooLargeError(
                 f"{duration // 60} minutes of audio cannot fit in "
-                f"{self.MAX_SIZE_MB} MB even at {self.MP3_BITRATE_LADDER[-1]} kbps."
+                f"{self.max_size_mb:.0f} MB even at {self.MP3_BITRATE_LADDER[-1]} kbps."
             )
 
         return plan
@@ -331,21 +386,26 @@ class DownloadYB:
     def process_audio(self, audio_file: Path) -> Path:
         """Convert the downloaded file into its final format inside ``output_dir``."""
         size = self.size_mb(audio_file)
-        logger.info("Initial file size: %.2f MB", size)
+        logger.info(
+            "Initial file size: %.2f MB (limit %.0f MB, prefer_flac=%s)",
+            size, self.max_size_mb, self.prefer_flac,
+        )
 
-        if size < self.MAX_SIZE_MB:
+        if size < self.max_size_mb:
 
-            if self.PREFER_FLAC:
+            if self.prefer_flac:
                 flac = self.convert_to_flac(audio_file, self._target_path(".flac"))
                 logger.info("FLAC size: %.2f MB", self.size_mb(flac))
 
-                if self.size_mb(flac) < self.MAX_SIZE_MB:
+                if self.size_mb(flac) < self.max_size_mb:
                     audio_file.unlink(missing_ok=True)
                     return flac
 
                 flac.unlink(missing_ok=True)
 
             elif audio_file.suffix.lower() == ".m4a":
+                # Fast path for the premium/local-server tier: no
+                # transcoding at all, just keep the original audio stream.
                 target = self._target_path(".m4a")
                 shutil.move(str(audio_file), str(target))
                 return target
@@ -360,7 +420,7 @@ class DownloadYB:
                 audio_file, self._target_path(".mp3"), bitrate_kbps=bitrate
             )
 
-            if self.size_mb(mp3) < self.MAX_SIZE_MB:
+            if self.size_mb(mp3) < self.max_size_mb:
                 audio_file.unlink(missing_ok=True)
                 self.mp3_bitrate_kbps = bitrate
                 logger.info("MP3 %s kbps: %.2f MB", bitrate, self.size_mb(mp3))
@@ -370,7 +430,7 @@ class DownloadYB:
 
         audio_file.unlink(missing_ok=True)
         raise AudioTooLargeError(
-            f"Audio is larger than {self.MAX_SIZE_MB} MB even at the lowest bitrate."
+            f"Audio is larger than {self.max_size_mb:.0f} MB even at the lowest bitrate."
         )
 
     def process_metadata(self, final_file: Path) -> None:
@@ -413,7 +473,9 @@ class DownloadYB:
         video_id: str,
     ) -> Path | None:
         """Return a cached JPEG thumbnail that Telegram will accept."""
-        if not url_thumbnail or not url_thumbnail.startswith("https://"):
+        # Defense in depth: only ever fetch from YouTube's own CDN, even
+        # though ``url_thumbnail`` normally comes straight from pytubefix.
+        if not is_allowed_thumbnail_url(url_thumbnail):
             return None
 
         # "_tg" avoids reusing old, oversized files that Telegram ignored.

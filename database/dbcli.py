@@ -178,4 +178,5 @@ def runcli():
         db_users.close()
         db_songs.close()
 
-runcli()
+if __name__ == "__main__":
+    runcli()

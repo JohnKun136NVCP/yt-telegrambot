@@ -1,6 +1,7 @@
 showDB.py
 __pycache__/
 venv/
+.venv/
 env/
 lib/
 lib64/
@@ -9,6 +10,9 @@ pyvenv.cfg
 bin/
 lib64/
 testing.py
+# Created by scripts/setup.sh when building the local Telegram Bot API server
+telegram-bot-api-src/
+bot-api-data/
 #Ignore files
 *.m4a
 *.flac
