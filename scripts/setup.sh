@@ -8,13 +8,20 @@
 #      package manager (apt/dnf/pacman).
 #   2. Creates a Python virtualenv and installs requirements.txt.
 #   3. Asks for TOKEN / ADMIN_IDS / plan prices / limits and writes a
-#      chmod-600 .env file (never overwritten silently).
+#      chmod-600 .env file (never overwritten silently -- if one already
+#      exists you're asked whether to start it over from scratch; either
+#      way, every value that is still missing or blank afterwards gets
+#      asked for, so a half-filled .env from a previous run gets completed
+#      instead of silently shipping a blank TOKEN).
 #   4. Creates the runtime directories the bot expects (logs, database,
 #      Songs, img, thumbimg).
 #   5. Optionally builds Telegram's official local Bot API server
 #      (tdlib/telegram-bot-api) from source, which is the only way this
 #      bot can ever send/receive files over 50 MB -- Telegram's cloud API
-#      hard-caps uploads at 50 MB no matter what the bot does.
+#      hard-caps uploads at 50 MB no matter what the bot does. If a build
+#      from an earlier run is found, you're asked whether to reuse it
+#      instead of rebuilding; the compile step itself shows a live "[ XX%]"
+#      progress readout instead of going silent for several minutes.
 #   6. Writes systemd units for the bot and (if built) the local Bot API
 #      server, both running as the SAME system user so the bot's
 #      file://-based fast upload path can read the files the local server
@@ -100,6 +107,66 @@ confirm() {
     read -r -p "$prompt [$hint]: " answer || true
     answer="${answer:-$default}"
     [[ "$answer" =~ ^[Yy] ]]
+}
+
+# --- .env helpers ------------------------------------------------------------
+# These read/write $ENV_FILE directly (instead of only building it once from
+# a batch of prompts) so an existing .env from a previous run can be
+# completed in place: already-set values are left untouched, only missing or
+# blank ones trigger a prompt.
+
+env_get() {
+    # env_get <key> -> current value in $ENV_FILE, or "" if missing/blank
+    grep -m1 "^$1=" "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true
+}
+
+env_set() {
+    # env_set <key> <value> -> update the key in $ENV_FILE in place,
+    # appending it if it isn't there yet.
+    local key="$1" value="$2" escaped
+    escaped="${value//&/\\&}"
+    escaped="${escaped//#/\\#}"
+    if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+        sed -i "s#^${key}=.*#${key}=${escaped}#" "$ENV_FILE"
+    else
+        echo "${key}=${value}" >> "$ENV_FILE"
+    fi
+}
+
+prompt_if_empty() {
+    # prompt_if_empty <key> <prompt> <default> [secret:0/1] [required:0/1] [hint]
+    #
+    # Only prompts (and only then prints <hint>, if given) when <key> is
+    # currently missing or blank in $ENV_FILE -- an already-filled value from
+    # a previous run is left exactly as it is.
+    local key="$1" prompt="$2" default="$3" secret="${4:-0}" required="${5:-0}" hint="${6:-}"
+    local current value
+
+    current="$(env_get "$key")"
+    [ -n "$current" ] && return
+
+    [ -n "$hint" ] && echo && echo "$hint"
+
+    if [ "$secret" = "1" ]; then
+        value="$(ask_secret "$prompt")"
+    else
+        value="$(ask "$prompt" "$default")"
+    fi
+
+    if [ "$required" = "1" ]; then
+        while [ "$NON_INTERACTIVE" = "0" ] && [ -z "$value" ]; do
+            warn "$key cannot be empty."
+            if [ "$secret" = "1" ]; then
+                value="$(ask_secret "$prompt")"
+            else
+                value="$(ask "$prompt" "$default")"
+            fi
+        done
+    else
+        value="${value:-$default}"
+    fi
+
+    env_set "$key" "$value"
 }
 
 if [ "$(id -u)" -eq 0 ]; then
@@ -189,86 +256,77 @@ info "Created logs/ database/ Songs/ img/ thumbimg/"
 step "Configuring .env"
 
 ENV_FILE="$REPO_DIR/.env"
-WRITE_ENV=1
 
 if [ -f "$ENV_FILE" ]; then
-    if confirm "A .env file already exists. Overwrite it?" n; then
+    info "Found an existing .env at $ENV_FILE."
+    if confirm "Start it over from scratch (every value blank again)?" n; then
         cp "$ENV_FILE" "$ENV_FILE.bak.$(date +%s)"
         info "Backed up the existing .env before overwriting."
+        rm -f "$ENV_FILE"
     else
-        WRITE_ENV=0
-        warn "Keeping the existing .env untouched. Remaining prompts in this" \
-             "section are skipped."
+        info "Keeping it -- checking for missing or blank values next."
     fi
 fi
 
-if [ "$WRITE_ENV" = "1" ]; then
-    echo
-    echo "Get a bot token from @BotFather on Telegram (the 'New Bot' flow)."
-    TOKEN="$(ask_secret "Bot TOKEN")"
-    while [ "$NON_INTERACTIVE" = "0" ] && [ -z "$TOKEN" ]; do
-        warn "TOKEN cannot be empty."
-        TOKEN="$(ask_secret "Bot TOKEN")"
-    done
-
-    echo
-    echo "Telegram user IDs (comma-separated) that should have admin access"
-    echo "(/grant, /revoke, /refund, /stats). Get your own id from @userinfobot."
-    ADMIN_IDS="$(ask "ADMIN_IDS" "")"
-
-    echo
-    echo "File-size caps. Telegram's cloud API refuses uploads over 50 MB no"
-    echo "matter what this bot sends, so STANDARD_MAX_MB should normally stay"
-    echo "under that; PREMIUM_MAX_MB only takes effect if you set up the local"
-    echo "Bot API server later in this script."
-    STANDARD_MAX_MB="$(ask "STANDARD_MAX_MB (free/standard users)" "49.5")"
-    PREMIUM_MAX_MB="$(ask "PREMIUM_MAX_MB (premium/admin users, local server only)" "1900")"
-
-    echo
-    echo "Download queue."
-    QUEUE_MAX_SIZE="$(ask "QUEUE_MAX_SIZE (jobs allowed to wait)" "50")"
-    QUEUE_WORKERS="$(ask "QUEUE_WORKERS (concurrent downloads)" "2")"
-    JOB_TIMEOUT_SECONDS="$(ask "JOB_TIMEOUT_SECONDS (per-job hard timeout)" "1800")"
-    MIN_SECONDS_BETWEEN_REQUESTS="$(ask "MIN_SECONDS_BETWEEN_REQUESTS (per-user flood control)" "3")"
-
-    echo
-    echo "Telegram Stars subscription plans, format code:label:days:stars"
-    echo "separated by commas. Leave empty to use the bundled defaults"
-    echo "(1 week / 1 month / 1 year)."
-    STAR_PLANS="$(ask "STAR_PLANS" "")"
-
+if [ ! -f "$ENV_FILE" ]; then
+    # Every key present but blank, so env_get/env_set (and prompt_if_empty
+    # below) have a single, predictable file to work against from here on.
     # Local Bot API server values are filled in later (section 5) if the
-    # user chooses to build it; left blank here means "use Telegram's
-    # cloud API", which is a fully working, 50 MB-capped default.
+    # user chooses to build it; left blank here means "use Telegram's cloud
+    # API", which is a fully working, 50 MB-capped default.
     cat > "$ENV_FILE" <<EOF
 # Generated by scripts/setup.sh on $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # Keep this file secret -- it holds your bot token. Permissions are set to
 # 600 (owner read/write only) right after this script writes it.
 
 # --- Required ---------------------------------------------------------------
-TOKEN=$TOKEN
-ADMIN_IDS=$ADMIN_IDS
+TOKEN=
+ADMIN_IDS=
 
 # --- File size tiers ---------------------------------------------------------
-STANDARD_MAX_MB=$STANDARD_MAX_MB
-PREMIUM_MAX_MB=$PREMIUM_MAX_MB
+STANDARD_MAX_MB=
+PREMIUM_MAX_MB=
 
 # --- Download queue -----------------------------------------------------------
-QUEUE_MAX_SIZE=$QUEUE_MAX_SIZE
-QUEUE_WORKERS=$QUEUE_WORKERS
-JOB_TIMEOUT_SECONDS=$JOB_TIMEOUT_SECONDS
-MIN_SECONDS_BETWEEN_REQUESTS=$MIN_SECONDS_BETWEEN_REQUESTS
+QUEUE_MAX_SIZE=
+QUEUE_WORKERS=
+JOB_TIMEOUT_SECONDS=
+MIN_SECONDS_BETWEEN_REQUESTS=
 
 # --- Telegram Stars plans (code:label:days:stars,...; blank = defaults) ------
-STAR_PLANS=$STAR_PLANS
+STAR_PLANS=
 
 # --- Local Bot API server (filled in automatically if you build it below) ---
 BOT_API_BASE_URL=
 BOT_API_LOCAL_MODE=false
 EOF
     chmod 600 "$ENV_FILE"
-    info "Wrote $ENV_FILE (chmod 600)."
 fi
+
+# Every call below is a no-op for a key that already has a non-blank value
+# (from an earlier run, or from the file just written above) -- only a
+# missing/blank one is actually prompted for. TOKEN is the only value the
+# bot cannot start without, so it's the only one that loops until non-empty.
+prompt_if_empty TOKEN "Bot TOKEN" "" 1 1 \
+    "Get a bot token from @BotFather on Telegram (the 'New Bot' flow)."
+
+prompt_if_empty ADMIN_IDS "ADMIN_IDS" "" 0 0 \
+    "Telegram user IDs (comma-separated) that should have admin access (/grant, /revoke, /refund, /stats). Get your own id from @userinfobot."
+
+prompt_if_empty STANDARD_MAX_MB "STANDARD_MAX_MB (free/standard users)" "49.5" 0 0 \
+    "File-size caps. Telegram's cloud API refuses uploads over 50 MB no matter what this bot sends, so STANDARD_MAX_MB should normally stay under that; PREMIUM_MAX_MB only takes effect if you set up the local Bot API server later in this script."
+prompt_if_empty PREMIUM_MAX_MB "PREMIUM_MAX_MB (premium/admin users, local server only)" "1900"
+
+prompt_if_empty QUEUE_MAX_SIZE "QUEUE_MAX_SIZE (jobs allowed to wait)" "50" 0 0 "Download queue."
+prompt_if_empty QUEUE_WORKERS "QUEUE_WORKERS (concurrent downloads)" "2"
+prompt_if_empty JOB_TIMEOUT_SECONDS "JOB_TIMEOUT_SECONDS (per-job hard timeout)" "1800"
+prompt_if_empty MIN_SECONDS_BETWEEN_REQUESTS "MIN_SECONDS_BETWEEN_REQUESTS (per-user flood control)" "3"
+
+prompt_if_empty STAR_PLANS "STAR_PLANS" "" 0 0 \
+    "Telegram Stars subscription plans, format code:label:days:stars separated by commas. Leave empty to use the bundled defaults (1 week / 1 month / 1 year)."
+
+chmod 600 "$ENV_FILE"
+info "$ENV_FILE is ready (chmod 600)."
 
 # ---------------------------------------------------------------------------
 # 5. Optional: local Bot API server (only way past the 50 MB cloud cap)
@@ -303,53 +361,81 @@ if confirm "Build and configure the local Bot API server now?" n; then
     DATA_DIR="$REPO_DIR/bot-api-data"
     mkdir -p "$DATA_DIR"
 
-    if [ ! -d "$BUILD_DIR" ]; then
-        info "Cloning tdlib/telegram-bot-api (this includes the td submodule, be patient)..."
-        git clone --recursive https://github.com/tdlib/telegram-bot-api.git "$BUILD_DIR"
+    # `--target install` (below) installs into $BUILD_DIR/bin/telegram-bot-api
+    # -- check there first so a previous run's build can be reused instead of
+    # recompiling tdlib from scratch every single time (that's the slow part).
+    EXISTING_BIN=""
+    if [ -x "$BUILD_DIR/bin/telegram-bot-api" ]; then
+        EXISTING_BIN="$BUILD_DIR/bin/telegram-bot-api"
+    elif [ -d "$BUILD_DIR" ]; then
+        EXISTING_BIN="$(find "$BUILD_DIR" -maxdepth 3 -type f -name telegram-bot-api -perm -u+x 2>/dev/null | head -n1)"
+    fi
+
+    if [ -n "$EXISTING_BIN" ] && confirm "Found an already-built telegram-bot-api at $EXISTING_BIN. Reuse it and skip rebuilding?" y; then
+        LOCAL_SERVER_BIN="$EXISTING_BIN"
+        info "Reusing the existing build at $LOCAL_SERVER_BIN."
     else
-        info "Source already present at $BUILD_DIR, reusing it."
-    fi
+        if [ ! -d "$BUILD_DIR" ]; then
+            info "Cloning tdlib/telegram-bot-api (this includes the td submodule, be patient)..."
+            git clone --recursive https://github.com/tdlib/telegram-bot-api.git "$BUILD_DIR"
+        else
+            info "Source already present at $BUILD_DIR, reusing it."
+        fi
 
-    mkdir -p "$BUILD_DIR/build"
-    (
-        cd "$BUILD_DIR/build"
-        info "Configuring build (cmake)..."
-        # -DCMAKE_INSTALL_PREFIX:PATH=.. matches tdlib/telegram-bot-api's own
-        # README exactly, so `--target install` below places the binary at
-        # $BUILD_DIR/bin/telegram-bot-api (one level above build/) instead of
-        # trying to write into /usr/local as root.
-        cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=.. .. >/tmp/telegram-bot-api-cmake.log 2>&1 \
-            || { cat /tmp/telegram-bot-api-cmake.log; fail "cmake configure failed, see above."; }
-        info "Building telegram-bot-api (this can take 10-30+ minutes)..."
-        cmake --build . --target install -- -j"$(nproc)" >/tmp/telegram-bot-api-build.log 2>&1 \
-            || { tail -n 100 /tmp/telegram-bot-api-build.log; fail "Build failed, see /tmp/telegram-bot-api-build.log"; }
-    )
+        mkdir -p "$BUILD_DIR/build"
+        (
+            cd "$BUILD_DIR/build"
+            info "Configuring build (cmake)..."
+            # -DCMAKE_INSTALL_PREFIX:PATH=.. matches tdlib/telegram-bot-api's
+            # own README exactly, so `--target install` below places the
+            # binary at $BUILD_DIR/bin/telegram-bot-api (one level above
+            # build/) instead of trying to write into /usr/local as root.
+            cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=.. .. >/tmp/telegram-bot-api-cmake.log 2>&1 \
+                || { cat /tmp/telegram-bot-api-cmake.log; fail "cmake configure failed, see above."; }
 
-    # `--target install` installs into $BUILD_DIR/build/../bin/telegram-bot-api
-    CANDIDATE="$BUILD_DIR/bin/telegram-bot-api"
-    if [ ! -x "$CANDIDATE" ]; then
-        CANDIDATE="$(find "$BUILD_DIR" -maxdepth 3 -type f -name telegram-bot-api -perm -u+x | head -n1)"
+            info "Building telegram-bot-api (this can take 10-30+ minutes)..."
+            BUILD_LOG="/tmp/telegram-bot-api-build.log"
+            : > "$BUILD_LOG"
+            # `cmake --build` (Makefiles generator, the default) prints
+            # "[ XX%] Building ..." lines as it goes -- pull just the
+            # percentage out of those and redraw it on one line instead of
+            # either dumping thousands of build lines or going silent for
+            # the whole 10-30+ minutes. Full output still goes to $BUILD_LOG
+            # for debugging. The `if ! pipeline; then` form (rather than
+            # `pipeline || { ...; }`) is required so a failing cmake doesn't
+            # trip `set -e` before the progress bar's trailing newline and
+            # the log tail below get a chance to run.
+            if ! cmake --build . --target install -- -j"$(nproc)" 2>&1 \
+                    | tee "$BUILD_LOG" \
+                    | while IFS= read -r line; do
+                          if [[ "$line" =~ ^\[[[:space:]]*([0-9]+)%\] ]]; then
+                              printf '\r    Building telegram-bot-api... %3s%%' "${BASH_REMATCH[1]}"
+                          fi
+                      done
+            then
+                echo
+                tail -n 100 "$BUILD_LOG"
+                fail "Build failed, see $BUILD_LOG"
+            fi
+            echo
+        )
+
+        CANDIDATE="$BUILD_DIR/bin/telegram-bot-api"
+        if [ ! -x "$CANDIDATE" ]; then
+            CANDIDATE="$(find "$BUILD_DIR" -maxdepth 3 -type f -name telegram-bot-api -perm -u+x | head -n1)"
+        fi
+        [ -n "$CANDIDATE" ] && [ -x "$CANDIDATE" ] || fail "Could not locate the built telegram-bot-api binary."
+        LOCAL_SERVER_BIN="$CANDIDATE"
+        info "Built telegram-bot-api at $LOCAL_SERVER_BIN"
     fi
-    [ -n "$CANDIDATE" ] && [ -x "$CANDIDATE" ] || fail "Could not locate the built telegram-bot-api binary."
-    LOCAL_SERVER_BIN="$CANDIDATE"
-    info "Built telegram-bot-api at $LOCAL_SERVER_BIN"
 
     LOCAL_SERVER_PORT="$(ask "Local Bot API HTTP port" "8081")"
 
-    if [ "$WRITE_ENV" = "1" ] || [ -f "$ENV_FILE" ]; then
-        # Point the bot at the local server and turn on file://-based uploads.
-        if grep -q '^BOT_API_BASE_URL=' "$ENV_FILE" 2>/dev/null; then
-            sed -i "s#^BOT_API_BASE_URL=.*#BOT_API_BASE_URL=http://127.0.0.1:$LOCAL_SERVER_PORT#" "$ENV_FILE"
-            sed -i "s#^BOT_API_LOCAL_MODE=.*#BOT_API_LOCAL_MODE=true#" "$ENV_FILE"
-        else
-            {
-                echo "BOT_API_BASE_URL=http://127.0.0.1:$LOCAL_SERVER_PORT"
-                echo "BOT_API_LOCAL_MODE=true"
-            } >> "$ENV_FILE"
-        fi
-        chmod 600 "$ENV_FILE"
-        info "Updated $ENV_FILE to use the local Bot API server."
-    fi
+    # Point the bot at the local server and turn on file://-based uploads.
+    env_set BOT_API_BASE_URL "http://127.0.0.1:$LOCAL_SERVER_PORT"
+    env_set BOT_API_LOCAL_MODE "true"
+    chmod 600 "$ENV_FILE"
+    info "Updated $ENV_FILE to use the local Bot API server."
 else
     info "Skipping the local Bot API server. STANDARD_MAX_MB stays the effective cap for everyone (see src/config.py: effective_premium_max_mb())."
 fi
