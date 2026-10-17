@@ -4,8 +4,11 @@
 # terminal (no Docker).
 #
 # What it does, in order:
-#   1. Installs system packages (ffmpeg + build tools) with the distro's
-#      package manager (apt/dnf/pacman).
+#   1. Asks before installing system packages (ffmpeg + build tools) with
+#      the distro's package manager (apt/dnf/pacman); output is logged to
+#      a file instead of flooding the terminal, an autoremove of orphaned
+#      packages is offered if there are any, and every required tool is
+#      then verified to actually be on PATH.
 #   2. Creates a Python virtualenv and installs requirements.txt.
 #   3. Asks for TOKEN / ADMIN_IDS / plan prices / limits and writes a
 #      chmod-600 .env file (never overwritten silently -- if one already
@@ -18,10 +21,20 @@
 #   5. Optionally builds Telegram's official local Bot API server
 #      (tdlib/telegram-bot-api) from source, which is the only way this
 #      bot can ever send/receive files over 50 MB -- Telegram's cloud API
-#      hard-caps uploads at 50 MB no matter what the bot does. If a build
-#      from an earlier run is found, you're asked whether to reuse it
-#      instead of rebuilding; the compile step itself shows a live "[ XX%]"
-#      progress readout instead of going silent for several minutes.
+#      hard-caps uploads at 50 MB no matter what the bot does.
+#        - The api_id/api_hash it needs are saved in .env (like TOKEN), so
+#          re-running this script never asks for them twice.
+#        - If a build from an earlier run is found, you're asked whether
+#          to reuse it instead of rebuilding.
+#        - Parallel build jobs are capped to what the available RAM+swap
+#          can actually support (tdlib's compile units are memory-heavy;
+#          blindly using every core on a small VPS can get the compiler --
+#          or the whole SSH session -- killed by the OOM killer), and a
+#          temporary swap file is offered when there isn't much of either.
+#        - The compile step shows a live "[ XX%]" progress readout instead
+#          of going silent for several minutes.
+#        - The resulting binary is smoke-tested with `--version` before
+#          being wired into systemd, whether it was just built or reused.
 #   6. Writes systemd units for the bot and (if built) the local Bot API
 #      server, both running as the SAME system user so the bot's
 #      file://-based fast upload path can read the files the local server
@@ -52,7 +65,7 @@ for arg in "$@"; do
     case "$arg" in
         --non-interactive|-y) NON_INTERACTIVE=1 ;;
         --help|-h)
-            sed -n '2,32p' "${BASH_SOURCE[0]}"
+            sed -n '2,52p' "${BASH_SOURCE[0]}"
             exit 0
             ;;
         *)
@@ -186,35 +199,110 @@ fi
 # 1. System packages
 # ---------------------------------------------------------------------------
 
-step "Installing system packages"
+step "System packages"
 
 PKGS_COMMON="ffmpeg git curl ca-certificates"
 PKGS_BUILD="cmake g++ make gperf zlib1g-dev libssl-dev"      # Debian/Ubuntu names
 PKGS_BUILD_RPM="cmake gcc-c++ make gperf zlib-devel openssl-devel"  # Fedora/RHEL names
+PKG_LOG="/tmp/yt-telegrambot-packages.log"
+: > "$PKG_LOG"
+export DEBIAN_FRONTEND=noninteractive
 
-if command -v apt-get >/dev/null 2>&1; then
-    PKG_MANAGER="apt"
-    $SUDO apt-get update -y
-    # shellcheck disable=SC2086
-    $SUDO apt-get install -y python3 python3-venv python3-pip $PKGS_COMMON $PKGS_BUILD
-elif command -v dnf >/dev/null 2>&1; then
-    PKG_MANAGER="dnf"
-    # shellcheck disable=SC2086
-    $SUDO dnf install -y python3 python3-pip python3-virtualenv $PKGS_COMMON $PKGS_BUILD_RPM
-elif command -v pacman >/dev/null 2>&1; then
-    PKG_MANAGER="pacman"
-    # shellcheck disable=SC2086
-    $SUDO pacman -Sy --needed --noconfirm python python-pip ffmpeg git curl cmake gcc make gperf zlib openssl
-else
-    PKG_MANAGER=""
-    warn "No supported package manager found (looked for apt-get/dnf/pacman)."
-    warn "Install manually: python3, python3-venv, pip, ffmpeg, git, cmake, a C++ compiler, gperf, zlib and OpenSSL dev headers."
-    if ! confirm "Continue anyway?" n; then
-        exit 1
+PKG_MANAGER=""
+
+if confirm "Install/update system packages (ffmpeg, python3, cmake, a C++ compiler and the other build tools)?" y; then
+    if command -v apt-get >/dev/null 2>&1; then
+        PKG_MANAGER="apt"
+        info "Updating package lists (full output: $PKG_LOG)..."
+        if ! $SUDO apt-get update -y -qq >> "$PKG_LOG" 2>&1; then
+            tail -n 50 "$PKG_LOG"
+            fail "apt-get update failed, see $PKG_LOG"
+        fi
+
+        info "Installing: python3 python3-venv python3-pip $PKGS_COMMON $PKGS_BUILD"
+        # shellcheck disable=SC2086
+        if ! $SUDO apt-get install -y -qq python3 python3-venv python3-pip $PKGS_COMMON $PKGS_BUILD >> "$PKG_LOG" 2>&1; then
+            tail -n 80 "$PKG_LOG"
+            fail "Package installation failed, see $PKG_LOG"
+        fi
+        info "Packages installed (full apt output kept in $PKG_LOG)."
+
+        if $SUDO apt-get -s autoremove 2>/dev/null | grep -q '^Remv '; then
+            if confirm "There are orphaned packages apt can remove (autoremove). Remove them now?" n; then
+                if $SUDO apt-get autoremove -y -qq >> "$PKG_LOG" 2>&1; then
+                    info "Removed orphaned packages."
+                else
+                    warn "autoremove failed, see $PKG_LOG"
+                fi
+            fi
+        fi
+    elif command -v dnf >/dev/null 2>&1; then
+        PKG_MANAGER="dnf"
+        info "Installing: python3 python3-pip python3-virtualenv $PKGS_COMMON $PKGS_BUILD_RPM"
+        # shellcheck disable=SC2086
+        if ! $SUDO dnf install -y -q python3 python3-pip python3-virtualenv $PKGS_COMMON $PKGS_BUILD_RPM >> "$PKG_LOG" 2>&1; then
+            tail -n 80 "$PKG_LOG"
+            fail "Package installation failed, see $PKG_LOG"
+        fi
+        info "Packages installed (full dnf output kept in $PKG_LOG)."
+
+        if $SUDO dnf autoremove --assumeno 2>/dev/null | grep -qi '^Removing\|^Remove '; then
+            if confirm "There are orphaned packages dnf can remove (autoremove). Remove them now?" n; then
+                if $SUDO dnf autoremove -y -q >> "$PKG_LOG" 2>&1; then
+                    info "Removed orphaned packages."
+                else
+                    warn "autoremove failed, see $PKG_LOG"
+                fi
+            fi
+        fi
+    elif command -v pacman >/dev/null 2>&1; then
+        PKG_MANAGER="pacman"
+        info "Installing: python python-pip ffmpeg git curl cmake gcc make gperf zlib openssl"
+        if ! $SUDO pacman -Sy --needed --noconfirm --quiet python python-pip ffmpeg git curl cmake gcc make gperf zlib openssl >> "$PKG_LOG" 2>&1; then
+            tail -n 80 "$PKG_LOG"
+            fail "Package installation failed, see $PKG_LOG"
+        fi
+        info "Packages installed (full pacman output kept in $PKG_LOG)."
+
+        ORPHANS="$(pacman -Qtdq 2>/dev/null || true)"
+        if [ -n "$ORPHANS" ]; then
+            if confirm "There are orphaned packages pacman can remove. Remove them now?" n; then
+                # shellcheck disable=SC2086
+                if $SUDO pacman -Rns --noconfirm $ORPHANS >> "$PKG_LOG" 2>&1; then
+                    info "Removed orphaned packages."
+                else
+                    warn "Removing orphans failed, see $PKG_LOG"
+                fi
+            fi
+        fi
+    else
+        warn "No supported package manager found (looked for apt-get/dnf/pacman)."
+        warn "Install manually: python3, python3-venv, pip, ffmpeg, git, cmake, a C++ compiler, gperf, zlib and OpenSSL dev headers."
     fi
+else
+    info "Skipping system package installation."
 fi
 
-command -v ffmpeg >/dev/null 2>&1 || warn "ffmpeg still not on PATH -- audio conversion will fail until it is installed."
+# Verify the tools this script and the bot actually need are present and on
+# PATH, whether they were just installed, were already there, or the step
+# above was skipped entirely.
+step "Verifying required tools"
+
+REQUIRED_BINS="python3 ffmpeg git cmake g++ make gperf"
+MISSING_BINS=""
+for bin in $REQUIRED_BINS; do
+    command -v "$bin" >/dev/null 2>&1 || MISSING_BINS="$MISSING_BINS $bin"
+done
+
+if [ -n "$MISSING_BINS" ]; then
+    warn "Missing:$MISSING_BINS"
+    warn "Install them manually, or re-run this script and let it install packages."
+    if ! confirm "Continue anyway (parts of this script will likely fail)?" n; then
+        exit 1
+    fi
+else
+    info "All required tools found: python3, ffmpeg, git, cmake, g++, make, gperf."
+fi
 
 # ---------------------------------------------------------------------------
 # 2. Python virtualenv
@@ -299,6 +387,8 @@ STAR_PLANS=
 # --- Local Bot API server (filled in automatically if you build it below) ---
 BOT_API_BASE_URL=
 BOT_API_LOCAL_MODE=false
+TELEGRAM_API_ID=
+TELEGRAM_API_HASH=
 EOF
     chmod 600 "$ENV_FILE"
 fi
@@ -348,14 +438,13 @@ echo "Skip this if the 50 MB cloud limit is fine for your users."
 if confirm "Build and configure the local Bot API server now?" n; then
     BUILD_LOCAL_SERVER=1
 
-    API_ID="$(ask "Telegram api_id (from my.telegram.org/apps)" "")"
-    API_HASH="$(ask_secret "Telegram api_hash (from my.telegram.org/apps)")"
-
-    while [ "$NON_INTERACTIVE" = "0" ] && { [ -z "$API_ID" ] || [ -z "$API_HASH" ]; }; do
-        warn "Both api_id and api_hash are required to run the local server."
-        API_ID="$(ask "Telegram api_id" "$API_ID")"
-        API_HASH="$(ask_secret "Telegram api_hash")"
-    done
+    # Stored in .env (like TOKEN) instead of only kept in this run's shell
+    # variables, so a later re-run -- or just reaching this step again after
+    # an interrupted build -- does not ask for the same credentials twice.
+    prompt_if_empty TELEGRAM_API_ID "Telegram api_id (from my.telegram.org/apps)" "" 0 1
+    prompt_if_empty TELEGRAM_API_HASH "Telegram api_hash (from my.telegram.org/apps)" "" 1 1
+    API_ID="$(env_get TELEGRAM_API_ID)"
+    API_HASH="$(env_get TELEGRAM_API_HASH)"
 
     BUILD_DIR="$REPO_DIR/telegram-bot-api-src"
     DATA_DIR="$REPO_DIR/bot-api-data"
@@ -375,6 +464,45 @@ if confirm "Build and configure the local Bot API server now?" n; then
         LOCAL_SERVER_BIN="$EXISTING_BIN"
         info "Reusing the existing build at $LOCAL_SERVER_BIN."
     else
+        # --- Memory check --------------------------------------------------
+        # tdlib's C++ translation units are heavy -- roughly 1.5-2 GB RAM
+        # per parallel compiler job, more during the final linking steps.
+        # Blindly using every core (the old `-j$(nproc)`) on a small VPS
+        # runs the kernel's OOM killer, which can kill the compiler, this
+        # script, or the whole SSH session along with it. Cap parallelism
+        # to what the available RAM+swap can actually support, and offer a
+        # temporary swap file when there isn't much of either.
+        MEM_KB="$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+        SWAP_KB="$(awk '/^SwapTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+        TOTAL_MB=$(( (MEM_KB + SWAP_KB) / 1024 ))
+        NPROC_N="$(nproc)"
+        SAFE_JOBS=$(( TOTAL_MB / 2048 ))
+        [ "$SAFE_JOBS" -lt 1 ] && SAFE_JOBS=1
+        [ "$SAFE_JOBS" -gt "$NPROC_N" ] && SAFE_JOBS="$NPROC_N"
+
+        if [ "$TOTAL_MB" -lt 2048 ]; then
+            warn "Only ~${TOTAL_MB} MB of RAM+swap detected. Compiling tdlib/telegram-bot-api can need 1.5-2 GB PER parallel job -- without enough memory the kernel's OOM killer can kill the build, or even your whole shell/SSH session."
+            SWAPFILE="/swapfile-yt-telegrambot-build"
+            if command -v swapon >/dev/null 2>&1 && confirm "Create a temporary 2 GB swap file at $SWAPFILE to make the build safer?" y; then
+                if [ ! -f "$SWAPFILE" ]; then
+                    info "Creating $SWAPFILE..."
+                    $SUDO fallocate -l 2G "$SWAPFILE" 2>/dev/null || $SUDO dd if=/dev/zero of="$SWAPFILE" bs=1M count=2048 status=none
+                    $SUDO chmod 600 "$SWAPFILE"
+                    $SUDO mkswap "$SWAPFILE" >/dev/null
+                fi
+                if ! swapon --show=NAME --noheadings 2>/dev/null | grep -qx "$SWAPFILE"; then
+                    $SUDO swapon "$SWAPFILE"
+                fi
+                info "Swap enabled. Remove it later with: sudo swapoff $SWAPFILE && sudo rm $SWAPFILE"
+                # Swap is much slower than RAM -- still cap parallelism
+                # conservatively rather than jumping straight to nproc.
+                SAFE_JOBS="$NPROC_N"
+                [ "$SAFE_JOBS" -gt 4 ] && SAFE_JOBS=4
+            fi
+        fi
+
+        BUILD_JOBS="$(ask "Parallel build jobs (lower = slower but safer on low-RAM machines)" "$SAFE_JOBS")"
+
         if [ ! -d "$BUILD_DIR" ]; then
             info "Cloning tdlib/telegram-bot-api (this includes the td submodule, be patient)..."
             git clone --recursive https://github.com/tdlib/telegram-bot-api.git "$BUILD_DIR"
@@ -393,7 +521,7 @@ if confirm "Build and configure the local Bot API server now?" n; then
             cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=.. .. >/tmp/telegram-bot-api-cmake.log 2>&1 \
                 || { cat /tmp/telegram-bot-api-cmake.log; fail "cmake configure failed, see above."; }
 
-            info "Building telegram-bot-api (this can take 10-30+ minutes)..."
+            info "Building telegram-bot-api with $BUILD_JOBS parallel job(s) (this can take 10-30+ minutes)..."
             BUILD_LOG="/tmp/telegram-bot-api-build.log"
             : > "$BUILD_LOG"
             # `cmake --build` (Makefiles generator, the default) prints
@@ -405,7 +533,7 @@ if confirm "Build and configure the local Bot API server now?" n; then
             # `pipeline || { ...; }`) is required so a failing cmake doesn't
             # trip `set -e` before the progress bar's trailing newline and
             # the log tail below get a chance to run.
-            if ! cmake --build . --target install -- -j"$(nproc)" 2>&1 \
+            if ! cmake --build . --target install -- -j"$BUILD_JOBS" 2>&1 \
                     | tee "$BUILD_LOG" \
                     | while IFS= read -r line; do
                           if [[ "$line" =~ ^\[[[:space:]]*([0-9]+)%\] ]]; then
@@ -415,7 +543,7 @@ if confirm "Build and configure the local Bot API server now?" n; then
             then
                 echo
                 tail -n 100 "$BUILD_LOG"
-                fail "Build failed, see $BUILD_LOG"
+                fail "Build failed, see $BUILD_LOG. If the compiler process was killed (exit 137, or 'dmesg | grep -i oom' shows a kill), re-run with fewer parallel jobs or more RAM/swap."
             fi
             echo
         )
@@ -428,6 +556,21 @@ if confirm "Build and configure the local Bot API server now?" n; then
         LOCAL_SERVER_BIN="$CANDIDATE"
         info "Built telegram-bot-api at $LOCAL_SERVER_BIN"
     fi
+
+    # --- Smoke test ----------------------------------------------------
+    # A file that exists and is executable is not the same as a binary that
+    # actually runs -- a partial build, a bad link, or a build interrupted
+    # by the OOM killer above can leave something that passes both of those
+    # checks but is still broken. `--version` is a real
+    # tdlib/telegram-bot-api flag (td::OptionParser: "display version
+    # number and exit") that runs and exits 0 without needing
+    # --api-id/--api-hash/--local, so it is a safe, fast way to confirm the
+    # binary genuinely works before wiring it into systemd.
+    info "Verifying the telegram-bot-api binary runs (smoke test)..."
+    if ! VERSION_LINE="$("$LOCAL_SERVER_BIN" --version 2>&1 | head -n1)"; then
+        fail "'$LOCAL_SERVER_BIN --version' failed to run -- the binary looks broken. Delete ${BUILD_DIR:-$REPO_DIR/telegram-bot-api-src}/build and re-run this script to rebuild it."
+    fi
+    info "OK: $VERSION_LINE"
 
     LOCAL_SERVER_PORT="$(ask "Local Bot API HTTP port" "8081")"
 
