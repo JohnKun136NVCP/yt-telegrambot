@@ -44,16 +44,17 @@ class DownloadYB:
     # only way a bot can physically deliver more than 50 MB.
     MAX_SIZE_MB = 49.9
 
-    # True: convert to FLAC when it fits. False: keep the original M4A (no
-    # transcoding, much faster, and it plays in Telegram's music player).
-    # Auto-disabled above FLAC_AUTO_THRESHOLD_MB -- see __init__.
+    # True: always convert to FLAC when it fits under the size cap. False:
+    # keep the original M4A (no transcoding, much faster).
+    #
+    # NOTE: YouTube's own audio is itself lossy (m4a/opus), so re-encoding it
+    # to FLAC does not recover any quality -- the result sounds identical to
+    # the original, just in a lossless *container* and several times larger.
+    # This is requested on purpose anyway (consistent format, some players/
+    # taggers handle FLAC better than M4A), so it is NOT auto-disabled for
+    # large size caps the way it used to be -- it applies the same for every
+    # tier, admin/premium included.
     PREFER_FLAC = True
-
-    # Above this cap, re-encoding a lossy YouTube source to "lossless" FLAC
-    # adds no quality and only wastes time/bandwidth/storage, so prefer_flac
-    # is auto-disabled when max_size_mb exceeds it (premium/local-server
-    # tier): the original, already-compact audio stream is kept as-is.
-    FLAC_AUTO_THRESHOLD_MB = 100.0
 
     # Valid MP3 bitrates (kbps), best quality first. When the audio is too big,
     # the highest one that is predicted to fit under the limit is used. The
@@ -137,13 +138,7 @@ class DownloadYB:
         without constructing a second ``DownloadYB``.
         """
         self.max_size_mb = float(max_size_mb)
-
-        if prefer_flac is None:
-            self.prefer_flac = (
-                self.PREFER_FLAC and self.max_size_mb <= self.FLAC_AUTO_THRESHOLD_MB
-            )
-        else:
-            self.prefer_flac = prefer_flac
+        self.prefer_flac = self.PREFER_FLAC if prefer_flac is None else prefer_flac
 
     # =========================================================================
     # URL
