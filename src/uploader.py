@@ -21,6 +21,8 @@ from __future__ import annotations
 import asyncio
 import io
 import os
+import shutil
+import uuid
 from pathlib import Path
 from typing import Callable
 
@@ -191,15 +193,39 @@ async def send_audio_with_progress(
         # Local Bot API server fast path: the server reads the files
         # directly off disk, so this request carries no binary payload at
         # all and completes almost instantly.
-        data["audio"] = f"file://{audio_path.resolve()}"
+        #
+        # Caveat: in this mode Telegram takes the file's name from the path
+        # itself (there is no multipart "filename" field to override it
+        # with), and the real cache file on disk is named "<video_id>.<ext>"
+        # to avoid collisions -- so without the staging below, every
+        # download would show up on the user's phone as a cryptic video id
+        # instead of "Artist - Title". A hard link (same inode, no byte
+        # copy) under the desired display name is created right next to the
+        # real file and removed again once the upload finishes; it falls
+        # back to a symlink, then a real copy, only if hard-linking isn't
+        # possible (e.g. tmp/data on different filesystems).
+        staged_path = audio_path.parent / f".upload-{uuid.uuid4().hex}-{filename}"
 
-        if thumbnail is not None and thumbnail.exists():
-            data["thumbnail"] = f"file://{thumbnail.resolve()}"
+        try:
+            os.link(audio_path, staged_path)
+        except OSError:
+            try:
+                staged_path.symlink_to(audio_path.resolve())
+            except OSError:
+                shutil.copy2(audio_path, staged_path)
 
-        if on_progress:
-            on_progress(100.0)
+        try:
+            data["audio"] = f"file://{staged_path.resolve()}"
 
-        return await _post_with_retry(url, data=data, files=None)
+            if thumbnail is not None and thumbnail.exists():
+                data["thumbnail"] = f"file://{thumbnail.resolve()}"
+
+            if on_progress:
+                on_progress(100.0)
+
+            return await _post_with_retry(url, data=data, files=None)
+        finally:
+            staged_path.unlink(missing_ok=True)
 
     mime_type = MIME_TYPES.get(audio_path.suffix.lower(), "application/octet-stream")
 
