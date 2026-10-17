@@ -63,7 +63,10 @@ python3 main.py
 `.env-example` documents every setting (file-size tiers, queue size/workers,
 flood control, Stars subscription plans, local Bot API server). Missing or invalid
 required values make the bot refuse to start with a clear error, instead of crashing
-confusingly later.
+confusingly later. See [`CONFIGURATION.md`](CONFIGURATION.md) for the full variable
+reference, a step-by-step breakdown of what `scripts/setup.sh` does, and
+troubleshooting (OOM kills while building the local server, re-running after an
+interruption, systemd usage).
 
 ### Going over 50 MB (premium file sizes)
 
