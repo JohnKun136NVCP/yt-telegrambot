@@ -56,24 +56,14 @@ class DownloadYB:
     FLAC_AUTO_THRESHOLD_MB = 100.0
 
     # Valid MP3 bitrates (kbps), best quality first. When the audio is too big,
-    # the highest one that is predicted to fit under the limit is used. The
-    # ladder is intentionally cut off at MIN_BITRATE_KBPS rather than going
-    # all the way down to something like 16 kbps: a song that still doesn't
-    # fit at the floor is rejected with a clear error instead of being
-    # delivered at a quality bad enough to not be worth listening to.
-    MP3_BITRATE_LADDER = (320, 256, 192, 160, 128, 96)
+    # the highest one that is predicted to fit under the limit is used.
+    MP3_BITRATE_LADDER = (320, 256, 192, 160, 128, 96, 64, 48, 32, 24, 16)
 
     # Encoders overshoot the target a bit (headers, tags, cover art).
     SIZE_SAFETY = 0.97
 
-    # The lowest bitrate this bot will ever encode to. Kept in sync with
-    # MP3_BITRATE_LADDER's last entry; see the comment above.
-    MIN_BITRATE_KBPS = 96
-
     # At or below this bitrate the audio is encoded as mono at 22.05 kHz,
     # which sounds much better than stereo 44.1 kHz at such low bitrates.
-    # (Unreachable with the current ladder floor of 96 kbps -- kept in case
-    # MP3_BITRATE_LADDER is ever extended lower again.)
     LOW_BITRATE_KBPS = 32
 
     def __init__(
