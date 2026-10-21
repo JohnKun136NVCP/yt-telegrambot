@@ -36,6 +36,34 @@ class DownloadYB:
     SPACES_RE = re.compile(r"\s+")
     TOPIC_RE = re.compile(r"^(.*) - Topic$")
 
+    # ASCII control characters (incl. newline/tab -- a stray one in a video
+    # title breaks a single-line filename) plus the Unicode invisible
+    # characters YouTube titles sometimes carry (zero-width space/joiner,
+    # variation selectors used to force emoji rendering, BOM). None of these
+    # show up as visibly "wrong" but can still break a filename or an upload.
+    CONTROL_CHARS_RE = re.compile(
+        r"[\x00-\x1f\x7f​-‏︎️﻿]"
+    )
+
+    # Common YouTube title clutter that describes the VIDEO, not the song,
+    # stripped only when it is the entire contents of one bracket/paren
+    # group so something like "(Taylor's Version)" or "(Remix)" -- which
+    # really does distinguish one track from another -- is never touched.
+    JUNK_TAG_RE = re.compile(
+        r"""[\(\[]\s*(?:
+            official\s*(?:music\s*)?video
+            |official\s*(?:music\s*)?audio
+            |official\s*lyrics?\s*video
+            |lyrics?\s*video
+            |lyrics?
+            |audio
+            |visualizer
+            |m\s*/\s*v
+            |hd|hq|4k|8k
+        )\s*[\)\]]""",
+        re.IGNORECASE | re.VERBOSE,
+    )
+
     # Default size cap, used when the caller doesn't ask for a different one.
     # Telegram's cloud Bot API caps uploads at 50 MB for every bot, free or
     # premium user alike; src/bot.py passes a larger value here for
@@ -220,15 +248,38 @@ class DownloadYB:
     # =========================================================================
 
     @classmethod
-    def clean_filename(cls, filename: str | None) -> str:
-        """Make ``filename`` safe to use as a file name."""
+    def clean_filename(cls, filename: str | None, max_bytes: int = 150) -> str:
+        """Make ``filename`` safe (and short enough) to use as a file name.
+
+        Three things a raw YouTube "Artist - Title" string can do that break
+        an actual on-disk file name, each handled here:
+          - Characters no filesystem/Telegram client accepts (``<>:"/\\|?*``,
+            control characters, a few invisible Unicode ones) are stripped.
+          - Common clutter that describes the VIDEO rather than the song
+            (``(Official Video)``, ``[Lyrics]``, ``(HD)``...) is removed so
+            the result reads like the actual song name.
+          - The result is capped at ``max_bytes`` UTF-8 BYTES, not
+            characters: a title heavy with emoji/CJK/accented characters can
+            be well under 100 *characters* and still blow past a
+            filesystem's ~255-byte filename limit once encoded, which used
+            to make the upload fail outright for exactly those titles
+            instead of merely truncating the display name.
+        """
         if not filename:
             return "Unknown"
 
+        filename = cls.JUNK_TAG_RE.sub("", filename)
+        filename = cls.CONTROL_CHARS_RE.sub("", filename)
         filename = cls.INVALID_FILENAME_RE.sub("", filename)
-        filename = cls.SPACES_RE.sub(" ", filename)
+        filename = cls.SPACES_RE.sub(" ", filename).strip()
 
-        return filename.strip()[:100] or "Unknown"
+        encoded = filename.encode("utf-8")[:max_bytes]
+
+        # Don't leave a truncated multi-byte UTF-8 sequence dangling.
+        while encoded and (encoded[-1] & 0xC0) == 0x80:
+            encoded = encoded[:-1]
+
+        return encoded.decode("utf-8", errors="ignore").strip() or "Unknown"
 
     def clean_artist(self, artist: str) -> str:
         """Remove the ' - Topic' suffix of auto-generated YouTube channels."""
