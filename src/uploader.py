@@ -22,7 +22,7 @@ import asyncio
 import io
 import os
 import shutil
-import uuid
+import tempfile
 from pathlib import Path
 from typing import Callable
 
@@ -199,22 +199,33 @@ async def send_audio_with_progress(
         # with), and the real cache file on disk is named "<video_id>.<ext>"
         # to avoid collisions -- so without the staging below, every
         # download would show up on the user's phone as a cryptic video id
-        # instead of "Artist - Title". A hard link (same inode, no byte
-        # copy) under the desired display name is created right next to the
-        # real file and removed again once the upload finishes; it falls
-        # back to a symlink, then a real copy, only if hard-linking isn't
-        # possible (e.g. tmp/data on different filesystems).
-        staged_path = audio_path.parent / f".upload-{uuid.uuid4().hex}-{filename}"
+        # instead of "Artist - Title".
+        #
+        # The uniqueness needed to avoid clashing with a concurrent upload
+        # of the same song goes in a TEMPORARY DIRECTORY, never in the file
+        # name itself -- an earlier version embedded it right in the name
+        # (".upload-<uuid>-Artist - Title.flac"), and that stray text and
+        # leading dot is exactly what some Telegram clients ended up saving
+        # to disk / failing to recognize the extension of. The basename
+        # Telegram ever sees is now the exact, clean display name. A hard
+        # link (same inode, no byte copy) is created under that name and
+        # the whole temp directory is removed once the upload finishes; it
+        # falls back to a symlink, then a real copy, only if hard-linking
+        # isn't possible (e.g. tmp/data on different filesystems).
+        staged_dir = Path(
+            tempfile.mkdtemp(prefix="tg-upload-", dir=audio_path.parent)
+        )
+        staged_path = staged_dir / filename
 
         try:
-            os.link(audio_path, staged_path)
-        except OSError:
             try:
-                staged_path.symlink_to(audio_path.resolve())
+                os.link(audio_path, staged_path)
             except OSError:
-                shutil.copy2(audio_path, staged_path)
+                try:
+                    staged_path.symlink_to(audio_path.resolve())
+                except OSError:
+                    shutil.copy2(audio_path, staged_path)
 
-        try:
             data["audio"] = f"file://{staged_path.resolve()}"
 
             if thumbnail is not None and thumbnail.exists():
@@ -225,7 +236,7 @@ async def send_audio_with_progress(
 
             return await _post_with_retry(url, data=data, files=None)
         finally:
-            staged_path.unlink(missing_ok=True)
+            shutil.rmtree(staged_dir, ignore_errors=True)
 
     mime_type = MIME_TYPES.get(audio_path.suffix.lower(), "application/octet-stream")
 
