@@ -32,6 +32,16 @@ Commands:
                                        then does this bookkeeping itself.
     stats                             Bot-wide usage/payment stats.
     songs                             List cached songs (idSongs.db).
+    clear-songs [-y] [--restart]      Wipe the ENTIRE songs cache: every row
+                                      in idSongs.db's `songs` table AND
+                                      every cached audio file under Songs/.
+                                      The next request for any song
+                                      re-downloads it from scratch. Asks for
+                                      a typed confirmation unless -y is
+                                      given. --restart restarts
+                                      yt-telegrambot.service afterward
+                                      (needs systemd + sudo) -- not required
+                                      for the clear itself to take effect.
 
 Examples:
     python3 database/dbcli.py grant 123456789 premium --days 30
@@ -39,21 +49,31 @@ Examples:
     python3 database/dbcli.py revoke 123456789
     python3 database/dbcli.py info 123456789
     python3 database/dbcli.py payments 123456789
+    python3 database/dbcli.py clear-songs --restart
 """
 
 import argparse
+import os
+import shutil
+import subprocess
 import sys
 from contextlib import closing
 from pathlib import Path
 
 # Allow running as `python3 database/dbcli.py ...` from any directory by
 # making sure the repo root (this file's parent's parent) is on sys.path,
-# since `database.databases` is imported as a package.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# since `database.databases` is imported as a package. Also used to find
+# Songs/ for `clear-songs`, independently of the current working directory.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 from database.databases import usrdatabase, ytdatabase  # noqa: E402
 
 VALID_GRANT_TYPES = ("admin", "premium", "subscribed")
+
+# Kept in sync with SUPPORTED_FORMATS in src/bot.py -- the extensions a
+# cached song can actually be stored as on disk.
+AUDIO_EXTENSIONS = (".flac", ".m4a", ".mp3")
 
 
 def _fmt(value) -> str:
@@ -269,6 +289,73 @@ def cmd_songs(_args) -> int:
     return 0
 
 
+def _restart_service(unit: str = "yt-telegrambot") -> bool:
+    """Restart a systemd unit, using sudo if we're not root. Best-effort."""
+    if shutil.which("systemctl") is None:
+        print("systemctl not found -- restart the bot manually.")
+        return False
+
+    command = [] if os.geteuid() == 0 else (["sudo"] if shutil.which("sudo") else [])
+    command += ["systemctl", "restart", unit]
+
+    try:
+        subprocess.run(command, check=True)
+    except subprocess.CalledProcessError as error:
+        print(f"Could not restart {unit}.service: {error}")
+        return False
+
+    print(f"Restarted {unit}.service")
+    return True
+
+
+def cmd_clear_songs(args) -> int:
+    songs_dir = REPO_ROOT / "Songs"
+
+    with closing(ytdatabase()) as db:
+        db.cursor.execute("SELECT COUNT(*) FROM songs")
+        row_count = db.cursor.fetchone()[0]
+
+    files = []
+    if songs_dir.is_dir():
+        for extension in AUDIO_EXTENSIONS:
+            files.extend(songs_dir.glob(f"*{extension}"))
+
+    if row_count == 0 and not files:
+        print("The songs cache is already empty -- nothing to clear.")
+        return 0
+
+    print(f"This will permanently delete:")
+    print(f"  - {row_count} row(s) from idSongs.db's 'songs' table")
+    print(f"  - {len(files)} cached audio file(s) under {songs_dir}")
+    print("Every song will be re-downloaded from scratch on its next request.")
+
+    if not args.yes:
+        answer = input("Type DELETE to confirm: ").strip()
+
+        if answer != "DELETE":
+            print("Aborted -- nothing was deleted.")
+            return 1
+
+    with closing(ytdatabase()) as db:
+        db.cursor.execute("DELETE FROM songs")
+        db.connect.commit()
+
+    removed = 0
+    for path in files:
+        try:
+            path.unlink()
+            removed += 1
+        except OSError as error:
+            print(f"Could not remove {path}: {error}")
+
+    print(f"Cleared {row_count} database row(s) and {removed}/{len(files)} file(s).")
+
+    if args.restart:
+        _restart_service()
+
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dbcli.py",
@@ -318,6 +405,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("stats", help="Bot-wide usage/payment stats.").set_defaults(func=cmd_stats)
     sub.add_parser("songs", help="List cached songs (idSongs.db).").set_defaults(func=cmd_songs)
+
+    p = sub.add_parser(
+        "clear-songs",
+        help="Wipe the songs cache (DB rows + cached audio files under Songs/).",
+    )
+    p.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt.")
+    p.add_argument(
+        "--restart", action="store_true",
+        help="Restart yt-telegrambot.service afterward (needs systemd + sudo).",
+    )
+    p.set_defaults(func=cmd_clear_songs)
 
     return parser
 
