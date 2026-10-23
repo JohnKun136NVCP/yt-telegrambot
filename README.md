@@ -49,6 +49,17 @@ install systemd services for both the bot and the local server so they survive r
 and crash-restart automatically. It's safe to re-run: it asks before overwriting
 anything it already created. See `./scripts/setup.sh --help`.
 
+**Deploying a later update** (new commits on this branch) is a separate, lighter
+script that does NOT touch `.env`, packages, or the local server build:
+
+```bash
+./scripts/update.sh
+```
+
+It pulls the latest changes, reinstalls Python dependencies only if
+`requirements.txt` changed, and restarts the running service(s) -- all in one
+command. See `./scripts/update.sh --help`.
+
 ### Option B: manual setup
 
 ```bash

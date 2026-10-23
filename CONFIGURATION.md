@@ -104,6 +104,34 @@ in CI).
    files. If `systemctl` isn't available, this step is skipped and the script
    prints how to run the bot manually instead.
 
+## Deploying updates: `scripts/update.sh`
+
+`scripts/setup.sh` is for first-time setup (or re-running it to change `.env`,
+packages, or the local server build). For just picking up new commits on this
+branch, use the lighter, non-interactive-by-default `scripts/update.sh` instead:
+
+```bash
+./scripts/update.sh
+```
+
+In one command, it:
+
+1. Refuses to pull over uncommitted local changes on the server (asks first
+   interactively; just aborts with `--non-interactive`/`-y`), so a manual edit
+   you made directly on the VPS is never silently overwritten.
+2. Runs `git pull --ff-only` on whatever branch is currently checked out. A
+   fast-forward-only pull never creates a merge commit; if your branch has
+   diverged (local commits the remote doesn't have), it stops and tells you to
+   resolve that yourself instead of guessing.
+3. Reinstalls Python dependencies -- but only if `requirements.txt` actually
+   changed in the pulled commits, so most updates skip this step. Pass
+   `--skip-deps` to skip it unconditionally.
+4. Restarts `yt-telegrambot.service` (and `telegram-bot-api.service` too, if
+   that unit exists) via systemd, using `sudo` if you're not root.
+
+It never touches `.env`, never installs system packages, and never rebuilds
+the local Bot API server -- for any of those, use `scripts/setup.sh`.
+
 ## Building the local Bot API server
 
 This step clones and compiles [`tdlib/telegram-bot-api`](https://github.com/tdlib/telegram-bot-api)
@@ -228,3 +256,33 @@ sudo journalctl -u telegram-bot-api -f
 Both services are configured with `Restart=on-failure` and run as the system user
 you chose during setup. To stop automatic startup, use
 `sudo systemctl disable --now yt-telegrambot` (and `telegram-bot-api` if applicable).
+
+## Admin CLI: `database/dbcli.py`
+
+A command-line tool for managing users and the song cache directly against the
+live SQLite databases, without going through Telegram. Run it from the repo
+root; `python3 database/dbcli.py --help` lists every command with its options.
+
+```bash
+python3 database/dbcli.py list                           # every user
+python3 database/dbcli.py info <telegram_id>
+python3 database/dbcli.py grant <telegram_id> premium --days 30   # or admin / subscribed
+python3 database/dbcli.py admin <telegram_id>             # admin, no expiry
+python3 database/dbcli.py revoke <telegram_id>            # back to free tier
+python3 database/dbcli.py delete-user <telegram_id>
+python3 database/dbcli.py reset-quota <telegram_id>       # force today's count to 0
+python3 database/dbcli.py payments [telegram_id]
+python3 database/dbcli.py refund <charge_id>              # DB bookkeeping only, not a real Telegram refund
+python3 database/dbcli.py stats
+python3 database/dbcli.py songs                           # list cached songs
+python3 database/dbcli.py clear-songs --restart           # wipe the ENTIRE song cache
+```
+
+`clear-songs` deletes every row in `idSongs.db`'s `songs` table **and** every
+cached audio file under `Songs/` -- useful after a change to how songs are
+encoded or named (like the FLAC/filename fixes above), so old cached files get
+regenerated with the new behavior instead of being served stale from before the
+fix. It asks for a typed `DELETE` confirmation unless you pass `-y`/`--yes`, and
+`--restart` restarts `yt-telegrambot.service` afterward (not required for the
+clear itself to take effect -- the bot reads the database fresh on every
+request -- but convenient to do in one command).
