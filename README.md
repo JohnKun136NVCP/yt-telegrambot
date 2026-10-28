@@ -60,6 +60,18 @@ It pulls the latest changes, reinstalls Python dependencies only if
 `requirements.txt` changed, and restarts the running service(s) -- all in one
 command. See `./scripts/update.sh --help`.
 
+**Checking for vulnerable dependencies** later on is a separate script that
+scans `requirements.txt` with `pip-audit` and only ever applies a fix after
+proving it installs and imports cleanly in a disposable environment first:
+
+```bash
+./scripts/check_updates.sh
+```
+
+See [`CONFIGURATION.md`](CONFIGURATION.md) for exactly what it checks, and
+`./scripts/check_updates.sh --help` for its flags (including `-y` for
+unattended/cron use).
+
 ### Option B: manual setup
 
 ```bash
