@@ -132,6 +132,53 @@ In one command, it:
 It never touches `.env`, never installs system packages, and never rebuilds
 the local Bot API server -- for any of those, use `scripts/setup.sh`.
 
+## Checking for vulnerable dependencies: `scripts/check_updates.sh`
+
+`requirements.txt` is pinned to exact versions, which is good for reproducible
+installs but means a known vulnerability discovered in a pinned package stays
+there until someone bumps it by hand. `scripts/check_updates.sh` automates that
+safely:
+
+```bash
+./scripts/check_updates.sh
+```
+
+In one command, it:
+
+1. Scans `requirements.txt` for known vulnerabilities using
+   [`pip-audit`](https://pypi.org/project/pip-audit/) (checks against the PyPI
+   Advisory Database / OSV), run in a throwaway virtualenv so it never pollutes
+   the real one. If nothing is flagged, it says so and stops.
+2. If something is flagged, lets `pip-audit --fix` propose a version bump --
+   but only on a **scratch copy** of `requirements.txt`, never the real file.
+3. Installs that scratch copy into a **second**, disposable virtualenv from
+   nothing, and smoke-tests it: every package in it must import cleanly, and so
+   must this project's own modules that directly use the packages being bumped
+   (`src/security.py`, `src/yb/meta.py`, `src/yb/songs.py`, `src/uploader.py`,
+   `database/databases.py`).
+4. Only if that smoke test passes does it copy the fix over the real
+   `requirements.txt`, reinstall the real `.venv`, and restart the running
+   service(s) (same restart step as `scripts/update.sh`).
+5. If anything fails along the way -- the fix doesn't install, or something
+   fails to import -- it prints exactly what broke and leaves the real
+   `requirements.txt` and `.venv` completely untouched. Nothing is restarted.
+
+It never commits or pushes anything -- it only changes the file on disk. If you
+want a fix it applied to also land in the repository, commit and push
+`requirements.txt` yourself afterwards.
+
+Flags: `--non-interactive`/`-y` applies a fix automatically once (and only
+once) it passes the smoke test, which makes this safe to run unattended, e.g.
+from a weekly cron job:
+
+```cron
+# Every Sunday at 4:17am, check for and safely apply dependency fixes.
+17 4 * * 0 cd /path/to/yt-telegrambot && ./scripts/check_updates.sh -y >> logs/check_updates.log 2>&1
+```
+
+`--report-only` just scans and prints what's vulnerable without installing,
+changing, or restarting anything. See `./scripts/check_updates.sh --help`.
+
 ## Building the local Bot API server
 
 This step clones and compiles [`tdlib/telegram-bot-api`](https://github.com/tdlib/telegram-bot-api)
