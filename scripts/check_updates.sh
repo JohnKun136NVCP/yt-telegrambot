@@ -19,16 +19,29 @@
 #      it says so and stops -- nothing else happens.
 #   3. If there are, copies requirements.txt to a scratch file and lets
 #      pip-audit fix *that copy* (never the real file yet).
-#   4. Builds a SECOND throwaway virtualenv and installs the scratch copy
-#      into it from nothing.
-#   5. Smoke-tests that install: every third-party package in it must
-#      import cleanly, and so must this project's own modules that
-#      directly use the packages being bumped (src/security.py,
+#   4. Builds a SECOND throwaway virtualenv and tries to install the
+#      scratch copy into it from nothing.
+#        - If that install fails because the bumped package needs a newer
+#          version of some OTHER pinned package (e.g. a newer aiohttp
+#          needing a newer yarl than requirements.txt has pinned), it
+#          retries once with every pin in the scratch copy relaxed to a
+#          floor ("X>=version" instead of "X==version") and lets pip's own
+#          resolver pick a mutually-compatible set -- nothing is allowed to
+#          go *below* the version it already had (or the fixed version
+#          pip-audit asked for), only to move up as far as needed. Whatever
+#          pip actually resolves is then re-pinned exactly, in the original
+#          file's order, keeping comments and extras like "[job-queue]".
+#        - If even that can't find a working combination, nothing is
+#          changed; it tells you exactly which packages are in conflict so
+#          you can resolve it by hand.
+#   5. Smoke-tests the install that *did* work: every third-party package
+#      in it must import cleanly, and so must this project's own modules
+#      that directly use the packages being bumped (src/security.py,
 #      src/yb/meta.py, src/yb/songs.py, src/uploader.py,
 #      database/databases.py).
-#   6. Only if that smoke test passes: copies the scratch file over the
-#      real requirements.txt, reinstalls the real .venv from it, and
-#      restarts the running service(s) -- the same restart step
+#   6. Only if that smoke test passes: copies the final, tested candidate
+#      over the real requirements.txt, reinstalls the real .venv from it,
+#      and restarts the running service(s) -- the same restart step
 #      scripts/update.sh uses.
 #   7. If anything in steps 3-5 fails: prints exactly what broke, leaves
 #      requirements.txt and the real .venv exactly as they were, and exits
@@ -70,7 +83,7 @@ for arg in "$@"; do
         --non-interactive|-y) NON_INTERACTIVE=1 ;;
         --report-only) REPORT_ONLY=1 ;;
         --help|-h)
-            sed -n '2,59p' "${BASH_SOURCE[0]}"
+            sed -n '2,72p' "${BASH_SOURCE[0]}"
             exit 0
             ;;
         *)
@@ -174,17 +187,17 @@ set +e
 FIX_STATUS=$?
 set -e
 
-if ! diff -q "$REPO_DIR/requirements.txt" "$CANDIDATE" >/dev/null 2>&1; then
-    info "Proposed change:"
-    diff -u "$REPO_DIR/requirements.txt" "$CANDIDATE" || true
-else
+if diff -q "$REPO_DIR/requirements.txt" "$CANDIDATE" >/dev/null 2>&1; then
     warn "pip-audit could not find a safe version for every flagged package (see output above)."
     warn "Nothing was changed. Fix the remaining package(s) manually and re-run."
     exit 2
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Install the candidate into a SECOND throwaway venv, from nothing
+# 4. Install the candidate into a SECOND throwaway venv, from nothing.
+#    If the literal bump conflicts with another pinned package, retry once
+#    with every pin relaxed to a floor and let pip's resolver reconcile
+#    them -- then re-pin whatever it actually chose.
 # ---------------------------------------------------------------------------
 
 step "Test-installing the candidate in a disposable environment"
@@ -197,11 +210,94 @@ if ! "$TEST_PY" -m pip install --quiet --upgrade pip >/dev/null; then
     exit 2
 fi
 
-if ! "$TEST_PY" -m pip install --quiet -r "$CANDIDATE"; then
-    fail "The candidate requirements.txt does not install cleanly (dependency conflict?)."
-    warn "Nothing was changed. The real requirements.txt and .venv are untouched."
-    exit 2
+set +e
+"$TEST_PY" -m pip install --quiet -r "$CANDIDATE"
+INSTALL_STATUS=$?
+set -e
+
+if [ "$INSTALL_STATUS" -ne 0 ]; then
+    warn "That exact version combination doesn't install -- it conflicts with another pinned package."
+    step "Retrying with a mutually-compatible set of versions"
+
+    # Relax every pin to a floor ("X>=version" instead of "X==version") so
+    # pip's resolver can raise whatever else it needs to -- it can only
+    # move versions UP from here, never below what was already pinned (or
+    # below the fixed version pip-audit just chose for the flagged
+    # package), so this can't silently reintroduce the vulnerability.
+    FLOOR_CANDIDATE="$AUDIT_TMP/requirements.floor.txt"
+    sed 's/==/>=/' "$CANDIDATE" > "$FLOOR_CANDIDATE"
+
+    rm -rf "$AUDIT_TMP/test-venv"
+    python3 -m venv "$AUDIT_TMP/test-venv"
+    TEST_PY="$AUDIT_TMP/test-venv/bin/python"
+    "$TEST_PY" -m pip install --quiet --upgrade pip >/dev/null
+
+    if ! "$TEST_PY" -m pip install --quiet -r "$FLOOR_CANDIDATE"; then
+        fail "No mutually-compatible set of versions was found automatically."
+        warn "Nothing was changed. The real requirements.txt and .venv are untouched."
+        warn "This needs a manual look: the vulnerable package's fixed version"
+        warn "conflicts with another dependency's own requirements."
+        exit 2
+    fi
+
+    # Pin down exactly what the resolver chose, in the ORIGINAL file's
+    # order, keeping its comments, blank lines, and extras like
+    # "[job-queue]" -- only the version numbers change.
+    FREEZE="$AUDIT_TMP/freeze.txt"
+    "$TEST_PY" -m pip freeze --local > "$FREEZE"
+
+    RESOLVED="$AUDIT_TMP/requirements.resolved.txt"
+    cat > "$AUDIT_TMP/pin_resolved.py" <<'PYEOF'
+import re
+import sys
+
+original_path, freeze_path, output_path = sys.argv[1], sys.argv[2], sys.argv[3]
+
+
+def normalize(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).strip().lower()
+
+
+resolved = {}
+with open(freeze_path, encoding="utf-8") as handle:
+    for line in handle:
+        line = line.strip()
+        if not line or line.startswith("#") or line.startswith("-") or "==" not in line:
+            continue
+        name, version = line.split("==", 1)
+        resolved[normalize(name)] = version
+
+out_lines = []
+with open(original_path, encoding="utf-8") as handle:
+    for raw_line in handle:
+        stripped = raw_line.rstrip("\n")
+        body = stripped.split("#", 1)[0].strip()
+        if not body or "==" not in body:
+            out_lines.append(stripped)
+            continue
+        name_and_extras = body.split("==", 1)[0]
+        bare_name = re.split(r"[\[;]", name_and_extras, maxsplit=1)[0].strip()
+        key = normalize(bare_name)
+        if key not in resolved:
+            out_lines.append(stripped)  # not actually installed; keep as-is
+            continue
+        out_lines.append(f"{name_and_extras.strip()}=={resolved[key]}")
+
+with open(output_path, "w", encoding="utf-8") as handle:
+    handle.write("\n".join(out_lines) + "\n")
+PYEOF
+
+    if ! "$TEST_PY" "$AUDIT_TMP/pin_resolved.py" "$REPO_DIR/requirements.txt" "$FREEZE" "$RESOLVED"; then
+        fail "Could not reconstruct a pinned requirements.txt from the resolved environment."
+        exit 2
+    fi
+
+    CANDIDATE="$RESOLVED"
+    info "Found a mutually-compatible set of versions."
 fi
+
+info "Proposed change:"
+diff -u "$REPO_DIR/requirements.txt" "$CANDIDATE" || true
 
 # ---------------------------------------------------------------------------
 # 5. Smoke-test: every package must import, and so must the project's own
