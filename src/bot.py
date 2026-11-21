@@ -931,6 +931,23 @@ async def _run_download(
     except AudioTooLargeError:
         await status.fail(f"📦 This audio is too large for the {max_size_mb:.0f} MB limit.")
 
+    except asyncio.CancelledError:
+        # Reached when the job queue's own timeout fires (JOB_TIMEOUT_SECONDS,
+        # 30 min by default): job_queue._worker_loop()'s asyncio.wait_for()
+        # cancels this coroutine instead of raising inside it, and
+        # CancelledError is a BaseException (not Exception), so it would
+        # otherwise skip every "except Exception" clause below -- leaving
+        # the status message stuck on its last progress update forever and
+        # the user with no idea the request died (it just never "arrives").
+        # Tell them, then re-raise so asyncio's cancellation still completes
+        # normally.
+        with suppress(Exception):
+            await status.fail(
+                "⏱️ This took too long and was cancelled. Try a shorter "
+                "video, or ask the bot owner to raise JOB_TIMEOUT_SECONDS."
+            )
+        raise
+
     except UploadError as error:
         logger.error("Telegram rejected the upload of %s: %s", url, error)
         await status.fail("📤 Telegram rejected the file. Please try again.")
