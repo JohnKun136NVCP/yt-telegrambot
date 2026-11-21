@@ -91,20 +91,23 @@ class DownloadYB:
     # all the way down to something like 16 kbps: a song that still doesn't
     # fit at the floor is rejected with a clear error instead of being
     # delivered at a quality bad enough to not be worth listening to.
-    MP3_BITRATE_LADDER = (320, 256, 192, 160, 128, 96)
+    #
+    # 80/64 were added as a last resort for very long audio (multi-hour
+    # compilations) that doesn't fit even at 96 kbps under the standard-tier
+    # size cap -- better to deliver something listenable than to fail
+    # outright. Paired with LOW_BITRATE_KBPS below, 64 kbps switches to mono.
+    MP3_BITRATE_LADDER = (320, 256, 192, 160, 128, 96, 80, 64)
 
     # Encoders overshoot the target a bit (headers, tags, cover art).
     SIZE_SAFETY = 0.97
 
     # The lowest bitrate this bot will ever encode to. Kept in sync with
     # MP3_BITRATE_LADDER's last entry; see the comment above.
-    MIN_BITRATE_KBPS = 96
+    MIN_BITRATE_KBPS = 64
 
     # At or below this bitrate the audio is encoded as mono at 22.05 kHz,
     # which sounds much better than stereo 44.1 kHz at such low bitrates.
-    # (Unreachable with the current ladder floor of 96 kbps -- kept in case
-    # MP3_BITRATE_LADDER is ever extended lower again.)
-    LOW_BITRATE_KBPS = 32
+    LOW_BITRATE_KBPS = 64
 
     def __init__(
         self,
