@@ -3,13 +3,68 @@
 import re
 from typing import Callable
 
-from pytubefix import YouTube
+from pytubefix import YouTube, extract
+from pytubefix.botGuard import bot_guard
+from pytubefix.innertube import InnerTube
 
 from src.logging_utils import get_file_logger
 
 logger = get_file_logger(__name__, "authClients.log")
 
 _DIGITS_RE = re.compile(r"\d+")
+
+
+def _make_po_token_verifier(video_id: str) -> Callable[[], tuple[str, str]]:
+    """Build a ``po_token_verifier`` callback for ``pytubefix``'s ``YouTube``.
+
+    By default pytubefix only tries to get a po_token (YouTube's anti-bot
+    "Proof of Origin" token) for a handful of clients, and even then it's
+    the implicit, lazy ``YouTube.pot``/``YouTube.visitor_data`` machinery --
+    which only produces a token good enough for WEB-based clients. YouTube's
+    SABR protection increasingly rejects every other client without one,
+    which is what was happening here (``SABRError: ... PoToken PENDING`` /
+    ``PENDING_MISSING`` for every client).
+
+    ``use_po_token=True`` + a custom ``po_token_verifier`` forces pytubefix
+    to fetch a po_token for every client. The verifier pytubefix ships by
+    default (``_default_po_token_verifier``) calls the blocking ``input()``
+    twice -- which would hang this bot forever on a headless server with no
+    TTY -- so a safe, non-interactive one must always be supplied instead.
+
+    This one reuses pytubefix's own, non-interactive building blocks: a
+    plain WEB ``player()`` call for ``visitor_data``, and the bundled
+    Node/botGuard runner (``pytubefix.botGuard.bot_guard``, via the pinned
+    ``nodejs-wheel-binaries`` package) for the po_token itself -- the exact
+    same pair ``YouTube.visitor_data``/``YouTube.pot`` would produce, just
+    computed eagerly instead of lazily so it works for every client.
+
+    pytubefix calls this at most once per ``YouTube``/``InnerTube`` instance
+    (the result is cached internally), and only when it actually needs a
+    po_token for an API call, so it is memoized here too: all clients tried
+    for the same video share a single visitor_data/po_token pair and a
+    single Node subprocess run, instead of paying that cost per client.
+    """
+    cache: dict[str, tuple[str, str]] = {}
+
+    def verifier() -> tuple[str, str]:
+        cached = cache.get("tokens")
+        if cached:
+            return cached
+
+        innertube_response = InnerTube("WEB").player(video_id)
+        try:
+            visitor_data = innertube_response["responseContext"]["visitorData"]
+        except KeyError:
+            params = innertube_response["responseContext"]["serviceTrackingParams"][0]["params"]
+            visitor_data = next(p["value"] for p in params if p["key"] == "visitor_data")
+
+        po_token = bot_guard.generate_po_token(video_id=video_id)
+
+        tokens = (visitor_data, po_token)
+        cache["tokens"] = tokens
+        return tokens
+
+    return verifier
 
 
 class AuthClient:
@@ -91,6 +146,20 @@ class AuthClient:
         """
         logger.info("Checking available clients...")
 
+        po_token_verifier = None
+        try:
+            po_token_verifier = _make_po_token_verifier(extract.video_id(self.url))
+        except Exception as error:
+            # Best effort: if the video id can't even be parsed out of the
+            # URL here, fall back to pytubefix's own default behaviour per
+            # client instead of failing the whole generator up front --
+            # ``YouTube(...)`` below will hit (and report) the same problem
+            # per client, same as before this po_token change.
+            logger.warning(
+                "Could not prepare a po_token verifier: %s: %s",
+                type(error).__name__, error,
+            )
+
         for client in self.clients:
             logger.info("Testing client: %s", client)
 
@@ -99,6 +168,11 @@ class AuthClient:
                     self.url,
                     client=client,
                     on_progress_callback=self.on_progress,
+                    **(
+                        {"use_po_token": True, "po_token_verifier": po_token_verifier}
+                        if po_token_verifier
+                        else {}
+                    ),
                 )
 
                 audio = self._best_audio(yt)
