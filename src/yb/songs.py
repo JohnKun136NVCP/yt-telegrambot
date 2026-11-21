@@ -3,6 +3,7 @@
 import re
 import shutil
 import subprocess
+import urllib.error
 from pathlib import Path
 from typing import Callable
 
@@ -226,10 +227,14 @@ class DownloadYB:
         # BUG FIX: the progress callback used to be defined but never
         # registered, so no progress was ever reported. It has to be passed to
         # YouTube(...) through AuthClient.
-        result = AuthClient(
+        # Keep the generator: if this client's stream answers 403 when the
+        # audio is actually downloaded, download_with_fallback() moves on to
+        # the next client instead of failing the whole request.
+        self._clients = AuthClient(
             self.completeUrl,
             on_progress=self._on_progress,
-        ).check_clients()
+        ).iter_clients()
+        result = next(self._clients, None)
 
         if not result:
             raise RuntimeError("No compatible YouTube client found.")
@@ -334,6 +339,50 @@ class DownloadYB:
 
         logger.info("Downloaded: %s", downloaded)
         return downloaded
+
+    @staticmethod
+    def _is_retryable(error: Exception) -> bool:
+        """Errors that depend on the client/stream URL, not on the video or the disk."""
+        if isinstance(error, urllib.error.HTTPError):
+            return error.code in (403, 404, 410, 429) or error.code >= 500
+        if isinstance(error, (urllib.error.URLError, TimeoutError, ConnectionError)):
+            return True
+        # pytubefix raises its own errors for broken/expired stream URLs too.
+        return type(error).__module__.startswith("pytubefix") and not any(
+            word in type(error).__name__ for word in ("Unavailable", "Private", "AgeRestricted", "Members", "Live")
+        )
+
+    def download_with_fallback(self) -> Path:
+        """``download_audio()``, trying the next compatible client on 403 & co."""
+        tried: list[str] = []
+
+        while True:
+            try:
+                return self.download_audio()
+            except Exception as error:
+                if not self._is_retryable(error):
+                    raise
+
+                tried.append(str(self.client))
+                logger.warning(
+                    "Client %s could not download the audio (%s: %s); trying the next client",
+                    self.client, type(error).__name__, error,
+                )
+                # pytubefix skips files that already exist: a partial file
+                # would be "downloaded" instantly and break ffmpeg later.
+                self._cleanup_temp()
+
+                nxt = next(getattr(self, "_clients", iter(())), None)
+                if nxt is None:
+                    raise RuntimeError(
+                        f"YouTube refused the download with every client (tried: {', '.join(tried)})"
+                    ) from error
+
+                self.yt, self.audio_stream, self.client = nxt
+                logger.info(
+                    "Retrying with client %s, stream %s (%s)",
+                    self.client, self.audio_stream, self.audio_stream.abr,
+                )
 
     # =========================================================================
     # FFmpeg
@@ -567,7 +616,7 @@ class DownloadYB:
             self.initialize_youtube()
             self.save_youtube_metadata()
 
-            downloaded_file = self.download_audio()
+            downloaded_file = self.download_with_fallback()
             final_file = self.process_audio(downloaded_file)
 
             self.process_metadata(final_file)

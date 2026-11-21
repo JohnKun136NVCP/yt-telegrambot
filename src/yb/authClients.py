@@ -71,6 +71,15 @@ class AuthClient:
 
     def check_clients(self):
         """Return ``(yt, audio_stream, client_name)`` or ``None``."""
+        return next(self.iter_clients(), None)
+
+    def iter_clients(self):
+        """Yield ``(yt, audio_stream, client_name)`` for every client that offers audio.
+
+        A client can list a stream and still get ``403 Forbidden`` when the
+        bytes are requested, so the downloader keeps this generator and asks
+        for the next client when that happens.
+        """
         logger.info("Checking available clients...")
 
         for client in self.clients:
@@ -89,7 +98,8 @@ class AuthClient:
                     logger.info(
                         "Client %s works: %s (%s)", client, audio, audio.abr
                     )
-                    return yt, audio, client
+                    yield yt, audio, client
+                    continue
 
                 logger.warning(
                     "Client %s has no compatible audio stream", client
@@ -102,5 +112,3 @@ class AuthClient:
                     type(error).__name__,
                     error,
                 )
-
-        return None
