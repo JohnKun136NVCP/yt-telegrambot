@@ -53,12 +53,21 @@ class AuthClient:
         return int(match.group()) if match else 0
 
     def _best_audio(self, yt: YouTube):
-        """Return the best compatible audio stream of ``yt`` (or ``None``)."""
-        candidates = [
-            stream
-            for stream in yt.streams.filter(only_audio=True)
-            if not getattr(stream, "is_sabr", False)
-        ]
+        """Return the best compatible audio stream of ``yt`` (or ``None``).
+
+        SABR ("Server ABR") is YouTube's newer streaming mode: more and more
+        videos/clients now ONLY expose audio through it instead of a plain
+        downloadable URL. This used to be filtered out here on the (now
+        outdated) assumption that a SABR stream can't be downloaded -- but
+        pytubefix >= 11.2 can: ``Stream.download()``/``.stream()`` detect
+        ``is_sabr`` themselves and transparently speak the SABR protocol
+        (``pytubefix.sabr.core.server_abr_stream.ServerAbrStream``) instead
+        of a plain HTTP range request. Excluding these streams here was
+        turning an otherwise-downloadable stream into "no compatible audio
+        stream" for every client that happens to be SABR-only for a given
+        video, which is exactly what was happening for long/popular videos.
+        """
+        candidates = list(yt.streams.filter(only_audio=True))
 
         if not candidates:
             return None
@@ -96,7 +105,8 @@ class AuthClient:
 
                 if audio:
                     logger.info(
-                        "Client %s works: %s (%s)", client, audio, audio.abr
+                        "Client %s works: %s (%s, sabr=%s)",
+                        client, audio, audio.abr, getattr(audio, "is_sabr", False),
                     )
                     yield yt, audio, client
                     continue
